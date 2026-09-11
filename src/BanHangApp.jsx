@@ -5,7 +5,8 @@ import {
   Plus, Pencil, Trash2, X, Search, ChevronRight, AlertTriangle, Menu,
   TrendingUp, TrendingDown, CircleDollarSign, PackageSearch, Undo2,
   Printer, LogOut, UserCog, Lock, ShieldCheck, Eye, EyeOff,
-  Tag, ClipboardList, Contact, Banknote, Landmark, FileSpreadsheet, Store, Percent, Check
+  Tag, ClipboardList, Contact, Banknote, Landmark, FileSpreadsheet, Store, Percent, Check,
+  CreditCard, BookOpen, ChevronDown
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -98,6 +99,7 @@ const STORE_KEYS = {
   employees: "ntcons:employees",
   payroll: "ntcons:payroll",
   channels: "ntcons:channels",
+  paymentmethods: "ntcons:paymentmethods",
   counters: "ntcons:counters",
 };
 
@@ -293,6 +295,7 @@ const NAV_GROUPS = [
       { key: "products", label: "Hàng hóa", icon: Package },
       { key: "customers", label: "Khách hàng", icon: Users },
       { key: "suppliers", label: "Nhà cung cấp", icon: Truck },
+      { key: "paymentmethods", label: "Phương thức thanh toán", icon: CreditCard },
     ],
   },
   {
@@ -319,6 +322,7 @@ const NAV_GROUPS = [
     items: [
       { key: "receipts", label: "Phiếu thu", icon: Wallet },
       { key: "payments", label: "Phiếu chi", icon: HandCoins },
+      { key: "soquy", label: "Sổ quỹ", icon: BookOpen },
       { key: "debt", label: "Công nợ", icon: CircleDollarSign },
     ],
   },
@@ -326,6 +330,7 @@ const NAV_GROUPS = [
     label: "Kho & Báo cáo",
     items: [
       { key: "stock", label: "Tồn kho", icon: Boxes },
+      { key: "nxt", label: "Nhập - Xuất - Tồn", icon: Boxes },
       { key: "reports", label: "Báo cáo", icon: FileBarChart },
       { key: "taxreport", label: "Báo cáo thuế", icon: Landmark },
     ],
@@ -353,8 +358,8 @@ const ROLE_LABELS = {
 const ROLE_PAGES = {
   admin: null, // null = all pages
   sales: ["dashboard", "products", "customers", "salesorders", "sales", "salereturns", "stock", "pricelists", "channels"],
-  accountant: ["dashboard", "customers", "suppliers", "receipts", "payments", "debt", "reports", "taxreport", "employees", "payroll", "pricelists"],
-  warehouse: ["dashboard", "products", "stockin", "stockout", "stock"],
+  accountant: ["dashboard", "customers", "suppliers", "receipts", "payments", "soquy", "debt", "reports", "taxreport", "employees", "payroll", "pricelists", "paymentmethods", "nxt"],
+  warehouse: ["dashboard", "products", "stockin", "stockout", "stock", "nxt"],
 };
 function pagesForRole(role) {
   const allowed = ROLE_PAGES[role];
@@ -362,76 +367,88 @@ function pagesForRole(role) {
   return allowed;
 }
 
-function Sidebar({ page, setPage, collapsed, setCollapsed, allowedPages, user, onLogout }) {
+function Sidebar({ page, setPage, collapsed, setCollapsed, allowedPages, user, onLogout, mobileOpen, onCloseMobile }) {
+  function goTo(key) {
+    setPage(key);
+    onCloseMobile?.();
+  }
   return (
-    <div
-      className="h-screen sticky top-0 flex flex-col shrink-0 transition-all"
-      style={{ width: collapsed ? 64 : 232, background: COLORS.navyDark }}
-    >
-      <div className="flex items-center gap-2 px-4 h-14 shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-        <img src={LOGO_SRC} alt="NTCONS" className="w-8 h-8 rounded shrink-0 object-contain" style={{ background: "#F6F2E9" }} />
-        {!collapsed && (
-          <div className="leading-tight overflow-hidden">
-            <div className="text-white text-[13.5px] font-semibold whitespace-nowrap">banhang.ntcons</div>
-            <div className="text-[11px] whitespace-nowrap" style={{ color: "rgba(255,255,255,0.45)" }}>Quản lý bán hàng</div>
-          </div>
-        )}
-        <button className="ml-auto p-1 rounded hover:bg-white/10" onClick={() => setCollapsed(!collapsed)}>
-          <Menu size={16} color="rgba(255,255,255,0.7)" />
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto py-2">
-        {NAV_GROUPS.map((g) => {
-          const visibleItems = g.items.filter((it) => allowedPages === null || allowedPages.includes(it.key));
-          if (visibleItems.length === 0) return null;
-          return (
-            <div key={g.label} className="mb-1">
-              {!collapsed && (
-                <div className="px-4 pt-3 pb-1 text-[10.5px] font-semibold tracking-wide" style={{ color: "rgba(255,255,255,0.35)" }}>
-                  {g.label}
-                </div>
-              )}
-              {visibleItems.map((it) => {
-                const active = page === it.key;
-                const Icon = it.icon;
-                return (
-                  <button
-                    key={it.key}
-                    onClick={() => setPage(it.key)}
-                    className="w-full flex items-center gap-2.5 px-4 py-2 text-[13.5px] transition-colors"
-                    style={{
-                      background: active ? "rgba(255,255,255,0.08)" : "transparent",
-                      color: active ? "#fff" : "rgba(255,255,255,0.65)",
-                      borderLeft: active ? `2.5px solid ${COLORS.gold}` : "2.5px solid transparent",
-                    }}
-                  >
-                    <Icon size={16} className="shrink-0" />
-                    {!collapsed && <span className="whitespace-nowrap">{it.label}</span>}
-                  </button>
-                );
-              })}
-            </div>
-          );
-        })}
-      </div>
-      <div className="px-3 py-3 shrink-0" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-        <div className="flex items-center gap-2 px-1 mb-2">
-          <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0" style={{ background: COLORS.gold, color: COLORS.navyDark }}>
-            {(user?.ten || "?").slice(0, 1).toUpperCase()}
-          </div>
+    <>
+      {mobileOpen && (
+        <div className="fixed inset-0 z-30 sm:hidden" style={{ background: "rgba(14,36,56,0.5)" }} onClick={onCloseMobile} />
+      )}
+      <div
+        className={`h-screen flex flex-col shrink-0 z-40 fixed inset-y-0 left-0 transition-transform duration-200 sm:sticky sm:top-0 sm:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
+        style={{ width: collapsed ? 64 : 232, background: COLORS.navyDark }}
+      >
+        <div className="flex items-center gap-2 px-4 h-14 shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+          <img src={LOGO_SRC} alt="NTCONS" className="w-8 h-8 rounded shrink-0 object-contain" style={{ background: "#F6F2E9" }} />
           {!collapsed && (
             <div className="leading-tight overflow-hidden">
-              <div className="text-white text-[12.5px] font-medium truncate">{user?.ten}</div>
-              <div className="text-[11px] truncate" style={{ color: "rgba(255,255,255,0.45)" }}>{ROLE_LABELS[user?.role] || user?.role}</div>
+              <div className="text-white text-[13.5px] font-semibold whitespace-nowrap">banhang.ntcons</div>
+              <div className="text-[11px] whitespace-nowrap" style={{ color: "rgba(255,255,255,0.45)" }}>Quản lý bán hàng</div>
             </div>
           )}
+          <button className="ml-auto p-1 rounded hover:bg-white/10 hidden sm:block" onClick={() => setCollapsed(!collapsed)}>
+            <Menu size={16} color="rgba(255,255,255,0.7)" />
+          </button>
+          <button className="ml-auto p-1 rounded hover:bg-white/10 sm:hidden" onClick={onCloseMobile}>
+            <X size={18} color="rgba(255,255,255,0.7)" />
+          </button>
         </div>
-        <button onClick={onLogout} className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-[12.5px]" style={{ color: "rgba(255,255,255,0.65)" }}>
-          <LogOut size={14} />
-          {!collapsed && "Đăng xuất"}
-        </button>
+        <div className="flex-1 overflow-y-auto py-2">
+          {NAV_GROUPS.map((g) => {
+            const visibleItems = g.items.filter((it) => allowedPages === null || allowedPages.includes(it.key));
+            if (visibleItems.length === 0) return null;
+            return (
+              <div key={g.label} className="mb-1">
+                {!collapsed && (
+                  <div className="px-4 pt-3 pb-1 text-[10.5px] font-semibold tracking-wide" style={{ color: "rgba(255,255,255,0.35)" }}>
+                    {g.label}
+                  </div>
+                )}
+                {visibleItems.map((it) => {
+                  const active = page === it.key;
+                  const Icon = it.icon;
+                  return (
+                    <button
+                      key={it.key}
+                      onClick={() => goTo(it.key)}
+                      className="w-full flex items-center gap-2.5 px-4 py-2 text-[13.5px] transition-colors"
+                      style={{
+                        background: active ? "rgba(255,255,255,0.08)" : "transparent",
+                        color: active ? "#fff" : "rgba(255,255,255,0.65)",
+                        borderLeft: active ? `2.5px solid ${COLORS.gold}` : "2.5px solid transparent",
+                      }}
+                    >
+                      <Icon size={16} className="shrink-0" />
+                      {!collapsed && <span className="whitespace-nowrap">{it.label}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+        <div className="px-3 py-3 shrink-0" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+          <div className="flex items-center gap-2 px-1 mb-2">
+            <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0" style={{ background: COLORS.gold, color: COLORS.navyDark }}>
+              {(user?.ten || "?").slice(0, 1).toUpperCase()}
+            </div>
+            {!collapsed && (
+              <div className="leading-tight overflow-hidden">
+                <div className="text-white text-[12.5px] font-medium truncate">{user?.ten}</div>
+                <div className="text-[11px] truncate" style={{ color: "rgba(255,255,255,0.45)" }}>{ROLE_LABELS[user?.role] || user?.role}</div>
+              </div>
+            )}
+          </div>
+          <button onClick={onLogout} className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-[12.5px]" style={{ color: "rgba(255,255,255,0.65)" }}>
+            <LogOut size={14} />
+            {!collapsed && "Đăng xuất"}
+          </button>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -440,20 +457,20 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, allowedPages, user, o
 /* ------------------------------------------------------------------ */
 function PageHeader({ title, subtitle, action }) {
   return (
-    <div className="flex items-center justify-between mb-4">
+    <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between mb-4">
       <div>
         <h1 className="text-[18px] font-semibold" style={{ color: COLORS.text }}>{title}</h1>
         {subtitle && <p className="text-[13px] mt-0.5" style={{ color: COLORS.textMuted }}>{subtitle}</p>}
       </div>
-      {action}
+      {action && <div className="sm:shrink-0">{action}</div>}
     </div>
   );
 }
 
 function Toolbar({ query, setQuery, placeholder, right }) {
   return (
-    <div className="flex items-center justify-between mb-3 gap-3">
-      <div className="relative w-72">
+    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 gap-2.5">
+      <div className="relative w-full sm:w-72">
         <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2" color={COLORS.textMuted} />
         <input
           value={query}
@@ -469,57 +486,101 @@ function Toolbar({ query, setQuery, placeholder, right }) {
 }
 
 function Table({ columns, rows, onEdit, onDelete, onPrint, rowKey = "id" }) {
+  const hasActions = !!(onEdit || onDelete || onPrint);
   return (
-    <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${COLORS.border}` }}>
-      <table className="w-full text-[13px]">
-        <thead>
-          <tr style={{ background: COLORS.bg }}>
-            {columns.map((c) => (
-              <th
-                key={c.key}
-                className="px-3 py-2 font-semibold whitespace-nowrap"
-                style={{ color: COLORS.textMuted, textAlign: c.align || "left", borderBottom: `1px solid ${COLORS.border}` }}
-              >
-                {c.label}
-              </th>
-            ))}
-            {(onEdit || onDelete || onPrint) && <th className="px-3 py-2 w-24"></th>}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={r[rowKey]} style={{ background: i % 2 ? "#FAFBFC" : "#fff", borderBottom: `1px solid ${COLORS.border}` }}>
+    <>
+      {/* Desktop / tablet: full data table */}
+      <div className="hidden sm:block rounded-lg overflow-x-auto" style={{ border: `1px solid ${COLORS.border}` }}>
+        <table className="w-full text-[13px]">
+          <thead>
+            <tr style={{ background: COLORS.bg }}>
               {columns.map((c) => (
-                <td key={c.key} className="px-3 py-2 align-middle" style={{ textAlign: c.align || "left", color: COLORS.text, fontVariantNumeric: "tabular-nums" }}>
-                  {c.render ? c.render(r) : r[c.key]}
-                </td>
+                <th
+                  key={c.key}
+                  className="px-3 py-2 font-semibold whitespace-nowrap"
+                  style={{ color: COLORS.textMuted, textAlign: c.align || "left", borderBottom: `1px solid ${COLORS.border}` }}
+                >
+                  {c.label}
+                </th>
               ))}
-              {(onEdit || onDelete || onPrint) && (
-                <td className="px-3 py-2">
-                  <div className="flex items-center gap-1 justify-end">
-                    {onPrint && (
-                      <button onClick={() => onPrint(r)} className="p-1.5 rounded hover:bg-slate-100">
-                        <Printer size={13.5} color={COLORS.textMuted} />
-                      </button>
-                    )}
-                    {onEdit && (
-                      <button onClick={() => onEdit(r)} className="p-1.5 rounded hover:bg-slate-100">
-                        <Pencil size={13.5} color={COLORS.textMuted} />
-                      </button>
-                    )}
-                    {onDelete && (
-                      <button onClick={() => onDelete(r)} className="p-1.5 rounded hover:bg-slate-100">
-                        <Trash2 size={13.5} color={COLORS.red} />
-                      </button>
-                    )}
-                  </div>
-                </td>
-              )}
+              {hasActions && <th className="px-3 py-2 w-24"></th>}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r[rowKey]} style={{ background: i % 2 ? "#FAFBFC" : "#fff", borderBottom: `1px solid ${COLORS.border}` }}>
+                {columns.map((c) => (
+                  <td key={c.key} className="px-3 py-2 align-middle" style={{ textAlign: c.align || "left", color: COLORS.text, fontVariantNumeric: "tabular-nums" }}>
+                    {c.render ? c.render(r) : r[c.key]}
+                  </td>
+                ))}
+                {hasActions && (
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-1 justify-end">
+                      {onPrint && (
+                        <button onClick={() => onPrint(r)} className="p-1.5 rounded hover:bg-slate-100">
+                          <Printer size={13.5} color={COLORS.textMuted} />
+                        </button>
+                      )}
+                      {onEdit && (
+                        <button onClick={() => onEdit(r)} className="p-1.5 rounded hover:bg-slate-100">
+                          <Pencil size={13.5} color={COLORS.textMuted} />
+                        </button>
+                      )}
+                      {onDelete && (
+                        <button onClick={() => onDelete(r)} className="p-1.5 rounded hover:bg-slate-100">
+                          <Trash2 size={13.5} color={COLORS.red} />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mobile: stacked cards — same data, one card per row */}
+      <div className="sm:hidden space-y-2">
+        {rows.map((r) => (
+          <div key={r[rowKey]} className="rounded-lg p-3" style={{ border: `1px solid ${COLORS.border}`, background: COLORS.surface }}>
+            <div className="text-[14px] font-semibold mb-1.5" style={{ color: COLORS.text }}>
+              {columns[0].render ? columns[0].render(r) : r[columns[0].key]}
+            </div>
+            {columns.slice(1).map((c) => {
+              const val = c.render ? c.render(r) : r[c.key];
+              if (val === "" || val === null || val === undefined) return null;
+              return (
+                <div key={c.key} className="flex items-center justify-between py-0.5 gap-3">
+                  <span className="text-[11.5px] shrink-0" style={{ color: COLORS.textMuted }}>{c.label}</span>
+                  <span className="text-[13px] text-right" style={{ color: COLORS.text, fontVariantNumeric: "tabular-nums" }}>{val}</span>
+                </div>
+              );
+            })}
+            {hasActions && (
+              <div className="flex items-center gap-1 justify-end mt-2 pt-2" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                {onPrint && (
+                  <button onClick={() => onPrint(r)} className="p-1.5 rounded hover:bg-slate-100">
+                    <Printer size={15} color={COLORS.textMuted} />
+                  </button>
+                )}
+                {onEdit && (
+                  <button onClick={() => onEdit(r)} className="p-1.5 rounded hover:bg-slate-100">
+                    <Pencil size={15} color={COLORS.textMuted} />
+                  </button>
+                )}
+                {onDelete && (
+                  <button onClick={() => onDelete(r)} className="p-1.5 rounded hover:bg-slate-100">
+                    <Trash2 size={15} color={COLORS.red} />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -602,16 +663,16 @@ function ProductForm({ initial, onSave, onCancel }) {
   });
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(f); }}>
-      <div className="grid grid-cols-2 gap-x-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Mã hàng" required><input required className={inputCls} style={inputStyle} value={f.ma} onChange={(e) => setF({ ...f, ma: e.target.value })} /></Field>
         <Field label="Đơn vị tính"><input className={inputCls} style={inputStyle} value={f.dvt} onChange={(e) => setF({ ...f, dvt: e.target.value })} /></Field>
       </div>
       <Field label="Tên hàng hóa" required><input required className={inputCls} style={inputStyle} value={f.ten} onChange={(e) => setF({ ...f, ten: e.target.value })} /></Field>
-      <div className="grid grid-cols-2 gap-x-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Giá vốn"><input type="number" className={inputCls} style={inputStyle} value={f.gia_von} onChange={(e) => setF({ ...f, gia_von: +e.target.value })} /></Field>
         <Field label="Giá bán"><input type="number" className={inputCls} style={inputStyle} value={f.gia_ban} onChange={(e) => setF({ ...f, gia_ban: +e.target.value })} /></Field>
       </div>
-      <div className="grid grid-cols-2 gap-x-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Tồn kho hiện tại"><input type="number" className={inputCls} style={inputStyle} value={f.ton_kho} onChange={(e) => setF({ ...f, ton_kho: +e.target.value })} /></Field>
         <Field label="Tồn tối thiểu (cảnh báo)"><input type="number" className={inputCls} style={inputStyle} value={f.ton_toi_thieu} onChange={(e) => setF({ ...f, ton_toi_thieu: +e.target.value })} /></Field>
       </div>
@@ -694,13 +755,13 @@ function PartnerForm({ initial, onSave, onCancel, kind, priceLists }) {
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(f); }}>
       <Field label="Tên" required><input required className={inputCls} style={inputStyle} value={f.ten} onChange={(e) => setF({ ...f, ten: e.target.value })} /></Field>
-      <div className="grid grid-cols-2 gap-x-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Điện thoại"><input className={inputCls} style={inputStyle} value={f.dien_thoai} onChange={(e) => setF({ ...f, dien_thoai: e.target.value })} /></Field>
         <Field label="Nợ đầu kỳ"><input type="number" className={inputCls} style={inputStyle} value={f.no_dau} onChange={(e) => setF({ ...f, no_dau: +e.target.value })} /></Field>
       </div>
       <Field label="Địa chỉ"><input className={inputCls} style={inputStyle} value={f.dia_chi} onChange={(e) => setF({ ...f, dia_chi: e.target.value })} /></Field>
       {kind === "customer" && (
-        <div className="grid grid-cols-2 gap-x-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
           <Field label="Bảng giá áp dụng">
             <select className={inputCls} style={inputStyle} value={f.bang_gia_id} onChange={(e) => setF({ ...f, bang_gia_id: e.target.value })}>
               <option value="">-- Giá bán mặc định --</option>
@@ -786,7 +847,7 @@ function PriceListForm({ initial, products, onSave, onCancel }) {
 
   return (
     <form onSubmit={submit}>
-      <div className="grid grid-cols-2 gap-x-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Tên bảng giá" required><input required className={inputCls} style={inputStyle} value={ten} onChange={(e) => setTen(e.target.value)} /></Field>
         <Field label="Ghi chú"><input className={inputCls} style={inputStyle} value={ghiChu} onChange={(e) => setGhiChu(e.target.value)} /></Field>
       </div>
@@ -1101,7 +1162,7 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, onCancel,
   return (
     <Modal title={isSale ? "Tạo đơn bán hàng" : "Tạo đơn mua hàng"} onClose={onCancel} width="max-w-3xl">
       <form onSubmit={submit}>
-        <div className="grid grid-cols-2 gap-x-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
           <Field label={isSale ? "Khách hàng" : "Nhà cung cấp"} required>
             <select required className={inputCls} style={inputStyle} value={doiTacId} onChange={(e) => setDoiTacId(e.target.value)}>
               <option value="">-- Chọn --</option>
@@ -1127,9 +1188,9 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, onCancel,
         )}
 
         <div className="mt-1 mb-2 text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>Chi tiết hàng hóa</div>
-        <div className="rounded-md border" style={{ borderColor: COLORS.border }}>
+        <div className="rounded-md border overflow-x-auto" style={{ borderColor: COLORS.border }}>
           {lines.map((l, idx) => (
-            <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0" style={{ borderColor: COLORS.border }}>
+            <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0 min-w-[600px]" style={{ borderColor: COLORS.border }}>
               <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
                 <option value="">-- Chọn hàng hóa --</option>
                 {products.map((p) => <option key={p.id} value={p.id}>{p.ten} ({p.ton_kho ?? 0} {p.dvt})</option>)}
@@ -1147,7 +1208,7 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, onCancel,
           <Plus size={13} /> Thêm dòng hàng
         </button>
 
-        <div className="grid grid-cols-2 gap-x-3 mt-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 mt-4">
           <Field label="Đã thanh toán ngay"><input type="number" min="0" className={inputCls} style={inputStyle} value={daThanhToan} onChange={(e) => setDaThanhToan(e.target.value)} /></Field>
           <div className="flex flex-col items-end justify-center pt-2">
             {isSale && discountAmount > 0 && (
@@ -1307,7 +1368,7 @@ function SalesOrderForm({ partners, products, priceLists, channels, onSave, onCa
   return (
     <Modal title="Tạo đơn đặt hàng" onClose={onCancel} width="max-w-3xl">
       <form onSubmit={submit}>
-        <div className="grid grid-cols-3 gap-x-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-3">
           <Field label="Khách hàng" required>
             <select required className={inputCls} style={inputStyle} value={doiTacId} onChange={(e) => setDoiTacId(e.target.value)}>
               <option value="">-- Chọn --</option>
@@ -1318,9 +1379,9 @@ function SalesOrderForm({ partners, products, priceLists, channels, onSave, onCa
           <Field label="Ngày giao dự kiến"><input type="date" className={inputCls} style={inputStyle} value={ngayGiao} onChange={(e) => setNgayGiao(e.target.value)} /></Field>
         </div>
         <div className="mt-1 mb-2 text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>Chi tiết hàng hóa</div>
-        <div className="rounded-md border" style={{ borderColor: COLORS.border }}>
+        <div className="rounded-md border overflow-x-auto" style={{ borderColor: COLORS.border }}>
           {lines.map((l, idx) => (
-            <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0" style={{ borderColor: COLORS.border }}>
+            <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0 min-w-[600px]" style={{ borderColor: COLORS.border }}>
               <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
                 <option value="">-- Chọn hàng hóa --</option>
                 {products.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
@@ -1335,7 +1396,7 @@ function SalesOrderForm({ partners, products, priceLists, channels, onSave, onCa
         <button type="button" onClick={addLine} className="mt-2 text-[12.5px] font-medium flex items-center gap-1" style={{ color: COLORS.navy }}>
           <Plus size={13} /> Thêm dòng hàng
         </button>
-        <div className="grid grid-cols-2 gap-x-3 mt-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 mt-4">
           <Field label="Ghi chú"><input className={inputCls} style={inputStyle} value={ghiChu} onChange={(e) => setGhiChu(e.target.value)} /></Field>
           <div className="flex flex-col items-end justify-center pt-4">
             <span className="text-[12.5px]" style={{ color: COLORS.textMuted }}>Tổng cộng</span>
@@ -1448,7 +1509,7 @@ function StockVoucherForm({ isIn, products, onSave, onCancel }) {
             {products.map((p) => <option key={p.id} value={p.id}>{p.ten} (tồn: {p.ton_kho ?? 0})</option>)}
           </select>
         </Field>
-        <div className="grid grid-cols-2 gap-x-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
           <Field label="Số lượng" required><input required type="number" min="1" className={inputCls} style={inputStyle} value={f.so_luong} onChange={(e) => setF({ ...f, so_luong: +e.target.value })} /></Field>
           <Field label="Ngày"><input type="date" className={inputCls} style={inputStyle} value={f.ngay} onChange={(e) => setF({ ...f, ngay: e.target.value })} /></Field>
         </div>
@@ -1465,14 +1526,16 @@ function StockVoucherForm({ isIn, products, onSave, onCancel }) {
 /* ------------------------------------------------------------------ */
 /* Phiếu thu / Phiếu chi                                               */
 /* ------------------------------------------------------------------ */
-function CashVoucherPage({ type, store, partnerStore }) {
+function CashVoucherPage({ type, store, partnerStore, paymentMethodStore }) {
   const isThu = type === "thu";
   const { items, add, remove } = store;
   const { items: partners } = partnerStore;
+  const { items: paymentMethods } = paymentMethodStore || { items: [] };
   const [creating, setCreating] = useState(false);
   const [toDelete, setToDelete] = useState(null);
   const [printing, setPrinting] = useState(null);
   const partnerName = (id) => partners.find((p) => p.id === id)?.ten || "Khác";
+  const pmName = (id) => paymentMethods.find((p) => p.id === id)?.ten;
   const list = [...items].sort((a, b) => (b.ngay || "").localeCompare(a.ngay || ""));
 
   function create(form) {
@@ -1495,6 +1558,7 @@ function CashVoucherPage({ type, store, partnerStore }) {
             { key: "ma", label: "Số phiếu" },
             { key: "ngay", label: "Ngày", render: (r) => fmtDate(r.ngay) },
             { key: "doi_tac", label: isThu ? "Khách hàng" : "Nhà cung cấp / Nội dung", render: (r) => (r.doi_tac_id ? partnerName(r.doi_tac_id) : r.ghi_chu || "—") },
+            { key: "phuong_thuc", label: "Quỹ", render: (r) => pmName(r.phuong_thuc_tt_id) ? <Badge tone="muted">{pmName(r.phuong_thuc_tt_id)}</Badge> : "—" },
             { key: "so_tien", label: "Số tiền", align: "right", render: (r) => <span style={{ color: isThu ? COLORS.green : COLORS.red, fontWeight: 600 }}>{fmtVND(r.so_tien)}</span> },
             { key: "ghi_chu", label: "Ghi chú" },
           ]}
@@ -1503,7 +1567,7 @@ function CashVoucherPage({ type, store, partnerStore }) {
           onDelete={setToDelete}
         />
       )}
-      {creating && <CashVoucherForm isThu={isThu} partners={partners} onCancel={() => setCreating(false)} onSave={create} />}
+      {creating && <CashVoucherForm isThu={isThu} partners={partners} paymentMethods={paymentMethods} onCancel={() => setCreating(false)} onSave={create} />}
       {toDelete && <ConfirmBar text={`Xóa phiếu "${toDelete.ma}"?`} onConfirm={() => { remove(toDelete.id); setToDelete(null); }} onCancel={() => setToDelete(null)} />}
       {printing && (
         <PrintDocument
@@ -1524,8 +1588,8 @@ function CashVoucherPage({ type, store, partnerStore }) {
   );
 }
 
-function CashVoucherForm({ isThu, partners, onSave, onCancel }) {
-  const [f, setF] = useState({ doi_tac_id: "", so_tien: 0, ngay: todayStr(), ghi_chu: "" });
+function CashVoucherForm({ isThu, partners, paymentMethods, onSave, onCancel }) {
+  const [f, setF] = useState({ doi_tac_id: "", so_tien: 0, ngay: todayStr(), ghi_chu: "", phuong_thuc_tt_id: "" });
   function submit(e) {
     e.preventDefault();
     if (!f.so_tien) return;
@@ -1540,10 +1604,18 @@ function CashVoucherForm({ isThu, partners, onSave, onCancel }) {
             {partners.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
           </select>
         </Field>
-        <div className="grid grid-cols-2 gap-x-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
           <Field label="Số tiền" required><input required type="number" min="0" className={inputCls} style={inputStyle} value={f.so_tien} onChange={(e) => setF({ ...f, so_tien: +e.target.value })} /></Field>
           <Field label="Ngày"><input type="date" className={inputCls} style={inputStyle} value={f.ngay} onChange={(e) => setF({ ...f, ngay: e.target.value })} /></Field>
         </div>
+        {paymentMethods && paymentMethods.length > 0 && (
+          <Field label="Quỹ / phương thức thanh toán">
+            <select className={inputCls} style={inputStyle} value={f.phuong_thuc_tt_id} onChange={(e) => setF({ ...f, phuong_thuc_tt_id: e.target.value })}>
+              <option value="">-- Chưa phân loại --</option>
+              {paymentMethods.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
+            </select>
+          </Field>
+        )}
         <Field label="Ghi chú / nội dung"><input className={inputCls} style={inputStyle} value={f.ghi_chu} onChange={(e) => setF({ ...f, ghi_chu: e.target.value })} /></Field>
         <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
           <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
@@ -1551,6 +1623,173 @@ function CashVoucherForm({ isThu, partners, onSave, onCancel }) {
         </div>
       </form>
     </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Phương thức thanh toán                                              */
+/* ------------------------------------------------------------------ */
+function PaymentMethodsPage({ store }) {
+  const { items, add, update, remove } = store;
+  const [editing, setEditing] = useState(null);
+  const [toDelete, setToDelete] = useState(null);
+
+  function save(form) {
+    if (form.id) update(form.id, form);
+    else add({ ...form, id: uid("PTTT") });
+    setEditing(null);
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Phương thức thanh toán"
+        subtitle="Quỹ tiền mặt, tài khoản ngân hàng, ví điện tử... dùng cho Phiếu thu/chi và Sổ quỹ"
+        action={<Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm phương thức</Btn>}
+      />
+      {items.length === 0 ? (
+        <EmptyState icon={CreditCard} title="Chưa có phương thức thanh toán" hint="VD: Tiền mặt, Chuyển khoản Vietcombank, Ví MoMo... Thêm để tách sổ quỹ theo từng nguồn tiền." action={<Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm phương thức</Btn>} />
+      ) : (
+        <Table
+          columns={[
+            { key: "ten", label: "Tên" },
+            { key: "loai", label: "Loại", render: (r) => <Badge tone={r.loai === "tien_mat" ? "amber" : "muted"}>{r.loai === "tien_mat" ? "Tiền mặt" : "Ngân hàng / ví"}</Badge> },
+            { key: "so_du_dau", label: "Số dư đầu (toàn thời gian)", align: "right", render: (r) => fmtVND(r.so_du_dau) },
+          ]}
+          rows={items}
+          onEdit={setEditing}
+          onDelete={setToDelete}
+        />
+      )}
+      {editing && (
+        <Modal title={editing.id ? "Sửa phương thức thanh toán" : "Thêm phương thức thanh toán"} onClose={() => setEditing(null)}>
+          <PaymentMethodForm initial={editing} onCancel={() => setEditing(null)} onSave={save} />
+        </Modal>
+      )}
+      {toDelete && <ConfirmBar text={`Xóa "${toDelete.ten}"?`} onConfirm={() => { remove(toDelete.id); setToDelete(null); }} onCancel={() => setToDelete(null)} />}
+    </div>
+  );
+}
+
+function PaymentMethodForm({ initial, onSave, onCancel }) {
+  const [f, setF] = useState({ ten: initial.ten || "", loai: initial.loai || "tien_mat", so_du_dau: initial.so_du_dau || 0, id: initial.id });
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSave(f); }}>
+      <Field label="Tên" required><input required className={inputCls} style={inputStyle} value={f.ten} onChange={(e) => setF({ ...f, ten: e.target.value })} placeholder="VD: Tiền mặt tại quầy, Vietcombank..." /></Field>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
+        <Field label="Loại">
+          <select className={inputCls} style={inputStyle} value={f.loai} onChange={(e) => setF({ ...f, loai: e.target.value })}>
+            <option value="tien_mat">Tiền mặt</option>
+            <option value="ngan_hang">Ngân hàng / ví điện tử</option>
+          </select>
+        </Field>
+        <Field label="Số dư đầu (toàn thời gian)"><input type="number" className={inputCls} style={inputStyle} value={f.so_du_dau} onChange={(e) => setF({ ...f, so_du_dau: +e.target.value })} /></Field>
+      </div>
+      <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+        <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
+        <Btn type="submit">Lưu</Btn>
+      </div>
+    </form>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Sổ quỹ                                                              */
+/* ------------------------------------------------------------------ */
+function SoQuyPage({ receipts, payments, paymentMethods }) {
+  const todayM = monthKey(todayStr());
+  const [tuNgay, setTuNgay] = useState(`${todayM}-01`);
+  const [denNgay, setDenNgay] = useState(todayStr());
+  const [quyId, setQuyId] = useState("all");
+
+  const matchesQuy = (r) => quyId === "all" || r.phuong_thuc_tt_id === quyId;
+
+  // All thu/chi entries as signed movements, oldest first
+  const allMoves = useMemo(() => {
+    const thu = receipts.filter(matchesQuy).map((r) => ({ ...r, loai: "thu", amount: r.so_tien }));
+    const chi = payments.filter(matchesQuy).map((r) => ({ ...r, loai: "chi", amount: -r.so_tien }));
+    return [...thu, ...chi].sort((a, b) => (a.ngay || "").localeCompare(b.ngay || "") || (a.ma || "").localeCompare(b.ma || ""));
+  }, [receipts, payments, quyId]);
+
+  const baseOpening = quyId === "all"
+    ? paymentMethods.reduce((s, p) => s + (p.so_du_dau || 0), 0)
+    : (paymentMethods.find((p) => p.id === quyId)?.so_du_dau || 0);
+
+  const openingBalance = baseOpening + allMoves.filter((m) => (m.ngay || "") < tuNgay).reduce((s, m) => s + m.amount, 0);
+  const inPeriod = allMoves.filter((m) => (m.ngay || "") >= tuNgay && (m.ngay || "") <= denNgay);
+  const totalThu = inPeriod.filter((m) => m.loai === "thu").reduce((s, m) => s + m.amount, 0);
+  const totalChi = inPeriod.filter((m) => m.loai === "chi").reduce((s, m) => s - m.amount, 0);
+  const closingBalance = openingBalance + totalThu - totalChi;
+
+  let running = openingBalance;
+  const rows = inPeriod.map((m) => {
+    running += m.amount;
+    return { ...m, running };
+  });
+
+  function doExport() {
+    exportExcel(`so-quy-${tuNgay}_${denNgay}`, [{
+      name: "Sổ quỹ",
+      rows: [
+        { "Ngày": "", "Chứng từ": "", "Diễn giải": "Số dư đầu kỳ", "Thu": "", "Chi": "", "Tồn quỹ": openingBalance },
+        ...rows.map((r) => ({
+          "Ngày": fmtDate(r.ngay), "Chứng từ": r.ma,
+          "Diễn giải": r.doi_tac_id ? "" : (r.ghi_chu || ""),
+          "Thu": r.loai === "thu" ? r.amount : "", "Chi": r.loai === "chi" ? -r.amount : "",
+          "Tồn quỹ": r.running,
+        })),
+      ],
+    }]);
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Sổ quỹ"
+        subtitle="Theo dõi dòng tiền thu/chi và số dư tồn quỹ theo thời gian"
+        action={<ExcelButton onClick={doExport} />}
+      />
+      <div className="flex flex-col sm:flex-row sm:items-end gap-2.5 mb-4">
+        <Field label="Quỹ">
+          <select className={inputCls} style={{ ...inputStyle, minWidth: 180 }} value={quyId} onChange={(e) => setQuyId(e.target.value)}>
+            <option value="all">Tất cả các quỹ</option>
+            {paymentMethods.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
+          </select>
+        </Field>
+        <Field label="Từ ngày"><input type="date" className={inputCls} style={inputStyle} value={tuNgay} onChange={(e) => setTuNgay(e.target.value)} /></Field>
+        <Field label="Đến ngày"><input type="date" className={inputCls} style={inputStyle} value={denNgay} onChange={(e) => setDenNgay(e.target.value)} /></Field>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <StatCard icon={BookOpen} label="Số dư đầu kỳ" value={fmtVND(openingBalance)} tone="navy" />
+        <StatCard icon={TrendingUp} label="Tổng thu trong kỳ" value={fmtVND(totalThu)} tone="green" />
+        <StatCard icon={TrendingDown} label="Tổng chi trong kỳ" value={fmtVND(totalChi)} tone="red" />
+        <StatCard icon={CircleDollarSign} label="Số dư cuối kỳ" value={fmtVND(closingBalance)} tone="navy" />
+      </div>
+
+      {paymentMethods.length === 0 && (
+        <div className="mb-4 px-3 py-2 rounded-md text-[12px]" style={{ background: COLORS.amberBg, color: "#5C4109" }}>
+          Bạn chưa có "Phương thức thanh toán" nào — sổ quỹ vẫn hiển thị được (gộp chung mọi phiếu thu/chi), nhưng để tách riêng tiền mặt/ngân hàng, hãy thêm phương thức thanh toán trong mục Danh mục.
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <EmptyState icon={BookOpen} title="Không có giao dịch nào trong kỳ" hint="Thử mở rộng khoảng ngày hoặc chọn quỹ khác." />
+      ) : (
+        <Table
+          columns={[
+            { key: "ma", label: "Chứng từ" },
+            { key: "ngay", label: "Ngày", render: (r) => fmtDate(r.ngay) },
+            { key: "dien_giai", label: "Diễn giải", render: (r) => r.ghi_chu || (r.loai === "thu" ? "Thu tiền" : "Chi tiền") },
+            { key: "thu", label: "Thu", align: "right", render: (r) => (r.loai === "thu" ? <span style={{ color: COLORS.green }}>{fmtVND(r.amount)}</span> : "") },
+            { key: "chi", label: "Chi", align: "right", render: (r) => (r.loai === "chi" ? <span style={{ color: COLORS.red }}>{fmtVND(-r.amount)}</span> : "") },
+            { key: "running", label: "Tồn quỹ", align: "right", render: (r) => <span style={{ fontWeight: 600 }}>{fmtVND(r.running)}</span> },
+          ]}
+          rows={rows}
+          rowKey="id"
+        />
+      )}
+    </div>
   );
 }
 
@@ -1593,7 +1832,7 @@ function DebtPage({ customers, suppliers, sales, purchases, receipts, payments, 
   return (
     <div>
       <PageHeader title="Công nợ" subtitle="Theo dõi công nợ phải thu và phải trả" action={<ExcelButton onClick={doExport} />} />
-      <div className="grid grid-cols-2 gap-3 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
         <StatCard icon={TrendingUp} label="Tổng phải thu (khách hàng)" value={fmtVND(totalPhaiThu)} tone="green" />
         <StatCard icon={TrendingDown} label="Tổng phải trả (nhà cung cấp)" value={fmtVND(totalPhaiTra)} tone="red" />
       </div>
@@ -1663,7 +1902,7 @@ function StockPage({ products }) {
   return (
     <div>
       <PageHeader title="Tồn kho" subtitle="Số lượng và giá trị tồn kho hiện tại" action={<ExcelButton onClick={doExport} />} />
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
         <StatCard icon={Boxes} label="Tổng mặt hàng" value={products.length} tone="navy" />
         <StatCard icon={CircleDollarSign} label="Giá trị tồn kho (theo giá vốn)" value={fmtVND(totalValue)} tone="navy" />
         <StatCard icon={AlertTriangle} label="Mặt hàng sắp hết" value={lowStock.length} tone="red" />
@@ -1686,6 +1925,125 @@ function StockPage({ products }) {
           ]}
           rows={filtered}
         />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Nhập - Xuất - Tồn chi tiết                                          */
+/* ------------------------------------------------------------------ */
+function NXTPage({ products, sales, purchases, salereturns, purchasereturns, vouchers }) {
+  const todayM = monthKey(todayStr());
+  const [tuNgay, setTuNgay] = useState(`${todayM}-01`);
+  const [denNgay, setDenNgay] = useState(todayStr());
+  const [query, setQuery] = useState("");
+  const [detailProduct, setDetailProduct] = useState(null);
+
+  const movements = useMemo(() => {
+    const list = [];
+    sales.forEach((inv) => inv.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: inv.ngay, delta: -it.so_luong, doc: inv.ma, loai: "Bán hàng" })));
+    purchases.forEach((inv) => inv.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: inv.ngay, delta: it.so_luong, doc: inv.ma, loai: "Mua hàng" })));
+    (salereturns || []).forEach((r) => r.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: r.ngay, delta: it.so_luong, doc: r.ma, loai: "Trả hàng bán" })));
+    (purchasereturns || []).forEach((r) => r.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: r.ngay, delta: -it.so_luong, doc: r.ma, loai: "Trả hàng mua" })));
+    (vouchers || []).forEach((v) => list.push({ productId: v.hang_hoa_id, ngay: v.ngay, delta: v.loai === "in" ? v.so_luong : -v.so_luong, doc: v.ma, loai: v.loai === "in" ? "Nhập kho" : "Xuất kho" }));
+    return list;
+  }, [sales, purchases, salereturns, purchasereturns, vouchers]);
+
+  const movesByProduct = useMemo(() => {
+    const map = {};
+    movements.forEach((m) => {
+      (map[m.productId] = map[m.productId] || []).push(m);
+    });
+    Object.values(map).forEach((arr) => arr.sort((a, b) => (a.ngay || "").localeCompare(b.ngay || "")));
+    return map;
+  }, [movements]);
+
+  const summary = useMemo(() => {
+    return products
+      .filter((p) => !query || p.ten?.toLowerCase().includes(query.toLowerCase()) || p.ma?.toLowerCase().includes(query.toLowerCase()))
+      .map((p) => {
+        const moves = movesByProduct[p.id] || [];
+        const current = p.ton_kho || 0;
+        const afterEnd = moves.filter((m) => (m.ngay || "") > denNgay).reduce((s, m) => s + m.delta, 0);
+        const closing = current - afterEnd;
+        const inPeriod = moves.filter((m) => (m.ngay || "") >= tuNgay && (m.ngay || "") <= denNgay);
+        const opening = closing - inPeriod.reduce((s, m) => s + m.delta, 0);
+        const nhap = inPeriod.filter((m) => m.delta > 0).reduce((s, m) => s + m.delta, 0);
+        const xuat = inPeriod.filter((m) => m.delta < 0).reduce((s, m) => s - m.delta, 0);
+        return { ...p, opening, nhap, xuat, closing };
+      });
+  }, [products, movesByProduct, tuNgay, denNgay, query]);
+
+  const detailRows = useMemo(() => {
+    if (!detailProduct) return [];
+    const s = summary.find((x) => x.id === detailProduct.id);
+    const moves = (movesByProduct[detailProduct.id] || []).filter((m) => (m.ngay || "") >= tuNgay && (m.ngay || "") <= denNgay);
+    let running = s?.opening || 0;
+    return moves.map((m) => {
+      running += m.delta;
+      return { ...m, running };
+    });
+  }, [detailProduct, movesByProduct, tuNgay, denNgay, summary]);
+
+  function doExport() {
+    exportExcel(`nhap-xuat-ton-${tuNgay}_${denNgay}`, [{
+      name: "NXT tổng hợp",
+      rows: summary.map((p) => ({
+        "Mã hàng": p.ma, "Tên hàng": p.ten, "ĐVT": p.dvt,
+        "Tồn đầu kỳ": p.opening, "Nhập trong kỳ": p.nhap, "Xuất trong kỳ": p.xuat, "Tồn cuối kỳ": p.closing,
+      })),
+    }]);
+  }
+
+  return (
+    <div>
+      <PageHeader title="Nhập - Xuất - Tồn" subtitle="Sổ kho theo kỳ: tồn đầu kỳ + nhập − xuất = tồn cuối kỳ" action={<ExcelButton onClick={doExport} />} />
+      <div className="flex flex-col sm:flex-row sm:items-end gap-2.5 mb-4">
+        <Field label="Từ ngày"><input type="date" className={inputCls} style={inputStyle} value={tuNgay} onChange={(e) => setTuNgay(e.target.value)} /></Field>
+        <Field label="Đến ngày"><input type="date" className={inputCls} style={inputStyle} value={denNgay} onChange={(e) => setDenNgay(e.target.value)} /></Field>
+      </div>
+      <Toolbar query={query} setQuery={setQuery} placeholder="Tìm mã hoặc tên hàng hóa..." />
+      {summary.length === 0 ? (
+        <EmptyState icon={Boxes} title="Chưa có hàng hóa" hint="Thêm hàng hóa trong mục Danh mục để xem báo cáo Nhập-Xuất-Tồn." />
+      ) : (
+        <Table
+          columns={[
+            { key: "ma", label: "Mã hàng" },
+            { key: "ten", label: "Tên hàng" },
+            { key: "opening", label: "Tồn đầu kỳ", align: "right" },
+            { key: "nhap", label: "Nhập trong kỳ", align: "right", render: (r) => <span style={{ color: COLORS.green }}>{r.nhap > 0 ? `+${r.nhap}` : 0}</span> },
+            { key: "xuat", label: "Xuất trong kỳ", align: "right", render: (r) => <span style={{ color: COLORS.red }}>{r.xuat > 0 ? `-${r.xuat}` : 0}</span> },
+            { key: "closing", label: "Tồn cuối kỳ", align: "right", render: (r) => <span style={{ fontWeight: 600 }}>{r.closing}</span> },
+            { key: "action", label: "", render: (r) => <Btn size="sm" variant="outline" onClick={() => setDetailProduct(r)}>Chi tiết</Btn> },
+          ]}
+          rows={summary}
+        />
+      )}
+      {detailProduct && (
+        <Modal title={`Chi tiết Nhập-Xuất-Tồn — ${detailProduct.ten}`} onClose={() => setDetailProduct(null)} width="max-w-2xl">
+          <div className="text-[13px] mb-3" style={{ color: COLORS.textMuted }}>
+            Từ {fmtDate(tuNgay)} đến {fmtDate(denNgay)} · Tồn đầu kỳ: <b style={{ color: COLORS.text }}>{detailProduct.opening}</b> {detailProduct.dvt}
+          </div>
+          {detailRows.length === 0 ? (
+            <div className="text-[13px] py-6 text-center" style={{ color: COLORS.textMuted }}>Không có phát sinh nào trong kỳ.</div>
+          ) : (
+            <Table
+              columns={[
+                { key: "ngay", label: "Ngày", render: (r) => fmtDate(r.ngay) },
+                { key: "doc", label: "Chứng từ" },
+                { key: "loai", label: "Loại" },
+                { key: "delta", label: "SL", align: "right", render: (r) => <span style={{ color: r.delta > 0 ? COLORS.green : COLORS.red }}>{r.delta > 0 ? `+${r.delta}` : r.delta}</span> },
+                { key: "running", label: "Tồn sau GD", align: "right", render: (r) => <span style={{ fontWeight: 600 }}>{r.running}</span> },
+              ]}
+              rows={detailRows}
+              rowKey="doc"
+            />
+          )}
+          <div className="flex justify-end mt-3 text-[13.5px] font-semibold" style={{ color: COLORS.text }}>
+            Tồn cuối kỳ: {detailProduct.closing} {detailProduct.dvt}
+          </div>
+        </Modal>
       )}
     </div>
   );
@@ -1741,11 +2099,11 @@ function EmployeeForm({ initial, onSave, onCancel }) {
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(f); }}>
       <Field label="Họ tên" required><input required className={inputCls} style={inputStyle} value={f.ten} onChange={(e) => setF({ ...f, ten: e.target.value })} /></Field>
-      <div className="grid grid-cols-2 gap-x-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Chức vụ"><input className={inputCls} style={inputStyle} value={f.chuc_vu} onChange={(e) => setF({ ...f, chuc_vu: e.target.value })} /></Field>
         <Field label="Điện thoại"><input className={inputCls} style={inputStyle} value={f.dien_thoai} onChange={(e) => setF({ ...f, dien_thoai: e.target.value })} /></Field>
       </div>
-      <div className="grid grid-cols-2 gap-x-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Lương cơ bản"><input type="number" className={inputCls} style={inputStyle} value={f.luong_co_ban} onChange={(e) => setF({ ...f, luong_co_ban: +e.target.value })} /></Field>
         <Field label="Ngày vào làm"><input type="date" className={inputCls} style={inputStyle} value={f.ngay_vao_lam} onChange={(e) => setF({ ...f, ngay_vao_lam: e.target.value })} /></Field>
       </div>
@@ -1913,7 +2271,7 @@ function TaxReportPage({ sales, purchases, products }) {
         <span>Đây là số liệu ước tính cơ bản dựa trên dữ liệu bán/mua hàng trong hệ thống (thuế suất GTGT lấy theo từng mặt hàng, thuế TNDN tính đơn giản trên lợi nhuận gộp — chưa trừ chi phí quản lý, khấu hao...). Vui lòng đối chiếu với kế toán/quyết toán thuế chính thức trước khi kê khai.</span>
       </div>
 
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
         <StatCard icon={Landmark} label="Thuế GTGT đầu ra" value={fmtVND(outputVAT)} tone="navy" />
         <StatCard icon={Landmark} label="Thuế GTGT đầu vào" value={fmtVND(inputVAT)} tone="navy" />
         <StatCard icon={Percent} label={vatPayable >= 0 ? "Thuế GTGT phải nộp" : "Thuế GTGT được khấu trừ"} value={fmtVND(Math.abs(vatPayable))} tone={vatPayable >= 0 ? "red" : "green"} />
@@ -1992,14 +2350,14 @@ function Dashboard({ products, customers, suppliers, sales, purchases, receipts,
   return (
     <div>
       <PageHeader title="Bảng điều khiển" subtitle={`Tổng quan hoạt động kinh doanh · ${fmtDate(todayStr())}`} />
-      <div className="grid grid-cols-4 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         <StatCard icon={TrendingUp} label="Doanh thu tháng này" value={fmtVND(revenueThisMonth)} tone="green" />
         <StatCard icon={ShoppingBag} label="Mua hàng tháng này" value={fmtVND(purchaseThisMonth)} tone="navy" />
         <StatCard icon={CircleDollarSign} label="Công nợ phải thu" value={fmtVND(totalPhaiThu)} tone="amber" />
         <StatCard icon={AlertTriangle} label="Hàng sắp hết tồn kho" value={lowStock.length} tone="red" />
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="col-span-2 rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
           <div className="text-[13.5px] font-semibold mb-3" style={{ color: COLORS.text }}>Doanh thu 7 ngày gần nhất</div>
           <ResponsiveContainer width="100%" height={220}>
@@ -2103,7 +2461,7 @@ function ReportsPage({ sales, purchases, products, channels }) {
   return (
     <div>
       <PageHeader title="Báo cáo" subtitle="Doanh thu, lợi nhuận và hàng bán chạy" action={<ExcelButton onClick={doExport} />} />
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
         <StatCard icon={TrendingUp} label="Tổng doanh thu" value={fmtVND(totalRevenue)} tone="green" />
         <StatCard icon={ShoppingBag} label="Tổng giá vốn" value={fmtVND(totalCost)} tone="navy" />
         <StatCard icon={CircleDollarSign} label="Lợi nhuận gộp" value={fmtVND(profit)} tone={profit >= 0 ? "green" : "red"} />
@@ -2287,7 +2645,7 @@ function ReturnForm({ isSaleReturn, invoices, partners, products, onSave, onCanc
   return (
     <Modal title={isSaleReturn ? "Tạo phiếu trả hàng bán" : "Tạo phiếu trả hàng mua"} onClose={onCancel} width="max-w-3xl">
       <form onSubmit={submit}>
-        <div className="grid grid-cols-2 gap-x-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
           <Field label={isSaleReturn ? "Khách hàng" : "Nhà cung cấp"} required>
             <select required className={inputCls} style={inputStyle} value={doiTacId} onChange={(e) => setDoiTacId(e.target.value)}>
               <option value="">-- Chọn --</option>
@@ -2297,9 +2655,9 @@ function ReturnForm({ isSaleReturn, invoices, partners, products, onSave, onCanc
           <Field label="Ngày chứng từ"><input type="date" className={inputCls} style={inputStyle} value={ngay} onChange={(e) => setNgay(e.target.value)} /></Field>
         </div>
         <div className="mt-1 mb-2 text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>Chi tiết hàng trả</div>
-        <div className="rounded-md border" style={{ borderColor: COLORS.border }}>
+        <div className="rounded-md border overflow-x-auto" style={{ borderColor: COLORS.border }}>
           {lines.map((l, idx) => (
-            <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0" style={{ borderColor: COLORS.border }}>
+            <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0 min-w-[600px]" style={{ borderColor: COLORS.border }}>
               <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
                 <option value="">-- Chọn hàng hóa --</option>
                 {products.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
@@ -2314,7 +2672,7 @@ function ReturnForm({ isSaleReturn, invoices, partners, products, onSave, onCanc
         <button type="button" onClick={addLine} className="mt-2 text-[12.5px] font-medium flex items-center gap-1" style={{ color: COLORS.navy }}>
           <Plus size={13} /> Thêm dòng hàng
         </button>
-        <div className="grid grid-cols-2 gap-x-3 mt-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 mt-4">
           <Field label="Lý do trả hàng"><input className={inputCls} style={inputStyle} value={lyDo} onChange={(e) => setLyDo(e.target.value)} placeholder="VD: hàng lỗi, giao sai, không đúng đơn..." /></Field>
           <div className="flex flex-col items-end justify-center pt-4">
             <span className="text-[12.5px]" style={{ color: COLORS.textMuted }}>Giá trị trả hàng</span>
@@ -2518,7 +2876,7 @@ function UserForm({ initial, onSave, onCancel }) {
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(f); }}>
       <Field label="Họ tên" required><input required className={inputCls} style={inputStyle} value={f.ten} onChange={(e) => setF({ ...f, ten: e.target.value })} /></Field>
-      <div className="grid grid-cols-2 gap-x-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Tên đăng nhập" required><input required className={inputCls} style={inputStyle} value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} /></Field>
         <Field label="Mật khẩu" required><input required className={inputCls} style={inputStyle} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field>
       </div>
@@ -2593,6 +2951,7 @@ function useAuth(usersStore) {
 export default function App() {
   const [page, setPage] = useState("dashboard");
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const productStore = useCollection(STORE_KEYS.products);
   const customerStore = useCollection(STORE_KEYS.customers);
@@ -2610,6 +2969,7 @@ export default function App() {
   const employeeStore = useCollection(STORE_KEYS.employees);
   const payrollStore = useCollection(STORE_KEYS.payroll);
   const channelStore = useCollection(STORE_KEYS.channels);
+  const paymentMethodStore = useCollection(STORE_KEYS.paymentmethods);
 
   const auth = useAuth(usersStore);
 
@@ -2618,7 +2978,8 @@ export default function App() {
     salesStore.loading || purchaseStore.loading || receiptStore.loading ||
     paymentStore.loading || voucherStore.loading || saleReturnStore.loading ||
     purchaseReturnStore.loading || priceListStore.loading || salesOrderStore.loading ||
-    employeeStore.loading || payrollStore.loading || channelStore.loading;
+    employeeStore.loading || payrollStore.loading || channelStore.loading ||
+    paymentMethodStore.loading;
 
   const allowedPages = auth.currentUser ? (ROLE_PAGES[auth.currentUser.role] || null) : [];
 
@@ -2685,8 +3046,10 @@ export default function App() {
     purchasereturns: <ReturnPage mode="purchase" retStore={purchaseReturnStore} invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} />,
     stockin: <StockVoucherPage type="in" store={voucherStore} productStore={productStore} />,
     stockout: <StockVoucherPage type="out" store={voucherStore} productStore={productStore} />,
-    receipts: <CashVoucherPage type="thu" store={receiptStore} partnerStore={customerStore} />,
-    payments: <CashVoucherPage type="chi" store={paymentStore} partnerStore={supplierStore} />,
+    receipts: <CashVoucherPage type="thu" store={receiptStore} partnerStore={customerStore} paymentMethodStore={paymentMethodStore} />,
+    payments: <CashVoucherPage type="chi" store={paymentStore} partnerStore={supplierStore} paymentMethodStore={paymentMethodStore} />,
+    paymentmethods: <PaymentMethodsPage store={paymentMethodStore} />,
+    soquy: <SoQuyPage receipts={receiptStore.items} payments={paymentStore.items} paymentMethods={paymentMethodStore.items} />,
     debt: (
       <DebtPage
         customers={customerStore.items}
@@ -2700,6 +3063,7 @@ export default function App() {
       />
     ),
     stock: <StockPage products={productStore.items} />,
+    nxt: <NXTPage products={productStore.items} sales={salesStore.items} purchases={purchaseStore.items} salereturns={saleReturnStore.items} purchasereturns={purchaseReturnStore.items} vouchers={voucherStore.items} />,
     reports: <ReportsPage sales={salesStore.items} purchases={purchaseStore.items} products={productStore.items} channels={channelStore.items} />,
     taxreport: <TaxReportPage sales={salesStore.items} purchases={purchaseStore.items} products={productStore.items} />,
     employees: <EmployeesPage store={employeeStore} />,
@@ -2712,14 +3076,27 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen" style={{ background: COLORS.bg, fontFamily: "Inter, system-ui, -apple-system, sans-serif" }}>
-      <Sidebar page={activePage} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} allowedPages={allowedPages} user={auth.currentUser} onLogout={auth.logout} />
+      <Sidebar
+        page={activePage}
+        setPage={setPage}
+        collapsed={collapsed}
+        setCollapsed={setCollapsed}
+        allowedPages={allowedPages}
+        user={auth.currentUser}
+        onLogout={auth.logout}
+        mobileOpen={mobileNavOpen}
+        onCloseMobile={() => setMobileNavOpen(false)}
+      />
       <div className="flex-1 min-w-0">
-        <div className="h-14 flex items-center px-6 gap-2" style={{ background: COLORS.surface, borderBottom: `1px solid ${COLORS.border}` }}>
-          <span className="text-[13px]" style={{ color: COLORS.textMuted }}>banhang.ntcons</span>
-          <ChevronRight size={13} color={COLORS.textMuted} />
-          <span className="text-[13px] font-medium" style={{ color: COLORS.text }}>{currentLabel}</span>
+        <div className="h-14 flex items-center px-3 sm:px-6 gap-2" style={{ background: COLORS.surface, borderBottom: `1px solid ${COLORS.border}` }}>
+          <button className="p-1.5 -ml-1 rounded hover:bg-slate-100 sm:hidden" onClick={() => setMobileNavOpen(true)}>
+            <Menu size={19} color={COLORS.text} />
+          </button>
+          <span className="text-[13px] hidden sm:inline" style={{ color: COLORS.textMuted }}>banhang.ntcons</span>
+          <ChevronRight size={13} color={COLORS.textMuted} className="hidden sm:inline" />
+          <span className="text-[13.5px] font-medium truncate" style={{ color: COLORS.text }}>{currentLabel}</span>
         </div>
-        <div className="p-6 max-w-[1200px]">
+        <div className="p-3 sm:p-6 max-w-[1200px]">
           {anyLoading ? (
             <div className="flex items-center justify-center py-24 text-[13px]" style={{ color: COLORS.textMuted }}>Đang tải dữ liệu...</div>
           ) : (
