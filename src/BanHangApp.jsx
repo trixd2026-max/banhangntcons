@@ -6,13 +6,14 @@ import {
   TrendingUp, TrendingDown, CircleDollarSign, PackageSearch, Undo2,
   Printer, LogOut, UserCog, Lock, ShieldCheck, Eye, EyeOff,
   Tag, ClipboardList, Contact, Banknote, Landmark, FileSpreadsheet, Store, Percent, Check,
-  CreditCard, BookOpen, ChevronDown
+  CreditCard, BookOpen, ChevronDown, Database, Bell, Upload, RotateCcw
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   BarChart, Bar, Legend, PieChart, Pie, Cell
 } from "recharts";
 import * as XLSX from "xlsx";
+import bcrypt from "bcryptjs";
 
 /* ------------------------------------------------------------------ */
 /* Brand asset (NTCONS logo)                                           */
@@ -344,7 +345,10 @@ const NAV_GROUPS = [
   },
   {
     label: "Quản trị",
-    items: [{ key: "users", label: "Người dùng", icon: UserCog }],
+    items: [
+      { key: "users", label: "Người dùng", icon: UserCog },
+      { key: "backup", label: "Sao lưu & Phục hồi", icon: Database },
+    ],
   },
 ];
 
@@ -2768,9 +2772,12 @@ function PrintButton({ onClick }) {
 /* Đăng nhập & Quản lý người dùng                                      */
 /* ------------------------------------------------------------------ */
 const SESSION_KEY = "ntcons:session";
-const DEFAULT_ADMIN = { id: "U_ADMIN", ten: "Quản trị viên", username: "admin", password: "admin123", role: "admin" };
+const DEFAULT_ADMIN_PLAINTEXT = "admin123";
+const DEFAULT_ADMIN = { id: "U_ADMIN", ten: "Quản trị viên", username: "admin", password: bcrypt.hashSync(DEFAULT_ADMIN_PLAINTEXT, 10), role: "admin" };
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_MINUTES = 15;
 
-function LoginScreen({ users, onLogin, bootstrapping }) {
+function LoginScreen({ users, onLogin, bootstrapping, updateUser }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -2780,15 +2787,48 @@ function LoginScreen({ users, onLogin, bootstrapping }) {
     e.preventDefault();
     const uname = username.trim();
     const pwd = password.trim();
-    let u = (users || []).find((x) => x.username.toLowerCase() === uname.toLowerCase() && x.password === pwd);
-    // Safety net: the default admin always works even if the shared user
-    // list hasn't finished loading yet, so a first-time login never blocks.
-    if (!u && uname.toLowerCase() === DEFAULT_ADMIN.username && pwd === DEFAULT_ADMIN.password) {
-      u = DEFAULT_ADMIN;
+    const existing = (users || []).find((x) => x.username.toLowerCase() === uname.toLowerCase());
+
+    // Locked out?
+    if (existing?.locked_until && new Date(existing.locked_until) > new Date()) {
+      const mins = Math.max(1, Math.ceil((new Date(existing.locked_until) - new Date()) / 60000));
+      setError(`Tài khoản tạm khóa do đăng nhập sai nhiều lần. Thử lại sau ${mins} phút.`);
+      return;
     }
-    if (!u) { setError("Sai tên đăng nhập hoặc mật khẩu."); return; }
+
+    let ok = false;
+    let matchedUser = existing;
+    if (existing) {
+      try {
+        ok = bcrypt.compareSync(pwd, existing.password || "");
+      } catch (e) {
+        ok = false;
+      }
+    } else if (uname.toLowerCase() === DEFAULT_ADMIN.username && pwd === DEFAULT_ADMIN_PLAINTEXT) {
+      // Safety net: the default admin always works even if the shared user
+      // list hasn't finished loading yet, so a first-time login never blocks.
+      ok = true;
+      matchedUser = DEFAULT_ADMIN;
+    }
+
+    if (!ok) {
+      setError("Sai tên đăng nhập hoặc mật khẩu.");
+      if (existing && updateUser) {
+        const attempts = (existing.failed_attempts || 0) + 1;
+        const patch = { failed_attempts: attempts };
+        if (attempts >= MAX_LOGIN_ATTEMPTS) {
+          patch.locked_until = new Date(Date.now() + LOCKOUT_MINUTES * 60000).toISOString();
+        }
+        updateUser(existing.id, patch);
+      }
+      return;
+    }
+
     setError("");
-    onLogin(u);
+    if (existing && (existing.failed_attempts || existing.locked_until) && updateUser) {
+      updateUser(existing.id, { failed_attempts: 0, locked_until: null });
+    }
+    onLogin(matchedUser);
   }
 
   return (
@@ -2822,7 +2862,7 @@ function LoginScreen({ users, onLogin, bootstrapping }) {
         </div>
         <div className="mt-4 flex items-start gap-2 rounded-md p-3 text-[11.5px]" style={{ background: COLORS.amberBg, color: "#5C4109" }}>
           <ShieldCheck size={14} className="mt-0.5 shrink-0" />
-          <span>Đăng nhập tài khoản mặc định lần đầu: <b>admin / admin123</b>. Đây là lớp phân quyền cơ bản để tổ chức công việc nội bộ, không phải bảo mật cấp doanh nghiệp — hãy đổi mật khẩu và không dùng cho dữ liệu nhạy cảm cần bảo mật cao.</span>
+          <span>Đăng nhập tài khoản mặc định lần đầu: <b>admin / admin123</b>. Mật khẩu được lưu dưới dạng mã hóa (bcrypt) và tài khoản tự khóa 15 phút sau {MAX_LOGIN_ATTEMPTS} lần đăng nhập sai — nhưng đây vẫn là lớp bảo mật cơ bản cho nội bộ, chưa phải xác thực cấp doanh nghiệp. Hãy đổi mật khẩu mặc định sớm.</span>
         </div>
       </div>
     </div>
@@ -2848,6 +2888,7 @@ function UsersPage({ store, currentUser }) {
           { key: "ten", label: "Họ tên" },
           { key: "username", label: "Tên đăng nhập" },
           { key: "role", label: "Vai trò", render: (r) => <Badge tone={r.role === "admin" ? "green" : "muted"}>{ROLE_LABELS[r.role] || r.role}</Badge> },
+          { key: "trang_thai", label: "Trạng thái", render: (r) => (r.locked_until && new Date(r.locked_until) > new Date() ? <Badge tone="red">Tạm khóa</Badge> : <Badge tone="green">Bình thường</Badge>) },
         ]}
         rows={items}
         onEdit={setEditing}
@@ -2866,19 +2907,42 @@ function UsersPage({ store, currentUser }) {
 }
 
 function UserForm({ initial, onSave, onCancel }) {
+  const isEditing = !!initial.id;
   const [f, setF] = useState({
     ten: initial.ten || "",
     username: initial.username || "",
-    password: initial.password || "",
+    password: "", // never pre-fill — this would otherwise show the stored hash
     role: initial.role || "sales",
     id: initial.id,
   });
+
+  function submit(e) {
+    e.preventDefault();
+    const payload = { ten: f.ten, username: f.username, role: f.role, id: f.id, failed_attempts: 0, locked_until: null };
+    if (f.password) {
+      payload.password = bcrypt.hashSync(f.password, 10);
+    } else if (!isEditing) {
+      return; // password required for a brand-new account
+    }
+    onSave(payload);
+  }
+
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave(f); }}>
+    <form onSubmit={submit}>
       <Field label="Họ tên" required><input required className={inputCls} style={inputStyle} value={f.ten} onChange={(e) => setF({ ...f, ten: e.target.value })} /></Field>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Tên đăng nhập" required><input required className={inputCls} style={inputStyle} value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} /></Field>
-        <Field label="Mật khẩu" required><input required className={inputCls} style={inputStyle} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field>
+        <Field label="Mật khẩu" required={!isEditing}>
+          <input
+            required={!isEditing}
+            type="password"
+            className={inputCls}
+            style={inputStyle}
+            value={f.password}
+            onChange={(e) => setF({ ...f, password: e.target.value })}
+            placeholder={isEditing ? "Để trống nếu không đổi" : ""}
+          />
+        </Field>
       </div>
       <Field label="Vai trò">
         <select className={inputCls} style={inputStyle} value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>
@@ -2946,6 +3010,211 @@ function useAuth(usersStore) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Sao lưu & Phục hồi                                                  */
+/* ------------------------------------------------------------------ */
+const BACKUP_STORE_LABELS = {
+  products: "Hàng hóa", customers: "Khách hàng", suppliers: "Nhà cung cấp",
+  sales: "Bán hàng", purchases: "Mua hàng", receipts: "Phiếu thu", payments: "Phiếu chi",
+  vouchers: "Phiếu kho (Nhập/Xuất)", salereturns: "Trả hàng bán", purchasereturns: "Trả hàng mua",
+  pricelists: "Bảng giá", salesorders: "Đơn đặt hàng", employees: "Nhân viên", payroll: "Bảng lương",
+  channels: "Kênh bán hàng", paymentmethods: "Phương thức thanh toán", users: "Người dùng (tài khoản)",
+};
+
+function BackupPage({ stores }) {
+  const [confirmRestore, setConfirmRestore] = useState(null);
+  const [error, setError] = useState("");
+  const [restored, setRestored] = useState(false);
+  const fileInputRef = useRef(null);
+
+  function doExport() {
+    const payload = { app: "banhang.ntcons", exported_at: new Date().toISOString(), data: {} };
+    Object.entries(stores).forEach(([key, store]) => {
+      payload.data[key] = store.items;
+    });
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `banhang-ntcons-backup-${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleFileChosen(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setRestored(false);
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!parsed || typeof parsed.data !== "object") throw new Error("File không đúng định dạng sao lưu của banhang.ntcons.");
+        setConfirmRestore(parsed);
+        setError("");
+      } catch (err) {
+        setError("Không đọc được file: " + err.message);
+      }
+    };
+    reader.onerror = () => setError("Không đọc được file đã chọn.");
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  function doRestore() {
+    if (!confirmRestore) return;
+    Object.entries(stores).forEach(([key, store]) => {
+      const incoming = confirmRestore.data[key];
+      if (Array.isArray(incoming)) store.persist(incoming);
+    });
+    setConfirmRestore(null);
+    setRestored(true);
+  }
+
+  const counts = Object.entries(stores).map(([key, store]) => ({ key, label: BACKUP_STORE_LABELS[key] || key, count: store.items.length }));
+  const totalRecords = counts.reduce((s, c) => s + c.count, 0);
+
+  return (
+    <div>
+      <PageHeader title="Sao lưu & Phục hồi" subtitle="Xuất toàn bộ dữ liệu ra 1 file, hoặc khôi phục từ file đã sao lưu trước đó" />
+
+      <div className="mb-4 px-3 py-2 rounded-md text-[12px] flex items-start gap-2" style={{ background: COLORS.amberBg, color: "#5C4109" }}>
+        <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <span>File sao lưu chứa toàn bộ dữ liệu kinh doanh, kể cả danh sách tài khoản đăng nhập (mật khẩu đã mã hóa, không phải dạng thô). Hãy lưu file này ở nơi an toàn, không chia sẻ công khai.</span>
+      </div>
+
+      {restored && (
+        <div className="mb-4 px-3 py-2 rounded-md text-[12.5px]" style={{ background: COLORS.greenBg, color: COLORS.green }}>
+          Đã phục hồi dữ liệu thành công từ file sao lưu.
+        </div>
+      )}
+      {error && <div className="mb-4 px-3 py-2 rounded-md text-[12.5px]" style={{ background: COLORS.redBg, color: COLORS.red }}>{error}</div>}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+        <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+          <div className="flex items-center gap-2 mb-2">
+            <Database size={16} color={COLORS.navy} />
+            <div className="text-[13.5px] font-semibold" style={{ color: COLORS.text }}>Xuất sao lưu</div>
+          </div>
+          <div className="text-[12.5px] mb-3" style={{ color: COLORS.textMuted }}>Tổng {totalRecords} bản ghi trên {counts.length} danh mục/module.</div>
+          <Btn onClick={doExport}><Database size={14} /> Xuất toàn bộ dữ liệu (.json)</Btn>
+        </div>
+        <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+          <div className="flex items-center gap-2 mb-2">
+            <Upload size={16} color={COLORS.navy} />
+            <div className="text-[13.5px] font-semibold" style={{ color: COLORS.text }}>Phục hồi từ file</div>
+          </div>
+          <div className="text-[12.5px] mb-3" style={{ color: COLORS.textMuted }}>Chọn file .json đã xuất trước đó. Thao tác này sẽ <b>thay thế toàn bộ</b> dữ liệu hiện tại.</div>
+          <input ref={fileInputRef} type="file" accept="application/json" onChange={handleFileChosen} className="hidden" />
+          <Btn variant="outline" onClick={() => fileInputRef.current?.click()}><Upload size={14} /> Chọn file để phục hồi</Btn>
+        </div>
+      </div>
+
+      <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+        <div className="text-[13.5px] font-semibold mb-3" style={{ color: COLORS.text }}>Dữ liệu hiện tại</div>
+        <Table
+          columns={[
+            { key: "label", label: "Danh mục / module" },
+            { key: "count", label: "Số bản ghi", align: "right" },
+          ]}
+          rows={counts}
+          rowKey="key"
+        />
+      </div>
+
+      {confirmRestore && (
+        <Modal title="Xác nhận phục hồi dữ liệu" onClose={() => setConfirmRestore(null)}>
+          <div className="flex items-start gap-2 mb-3 px-3 py-2 rounded-md text-[12.5px]" style={{ background: COLORS.redBg, color: COLORS.red }}>
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <span>Toàn bộ dữ liệu hiện tại sẽ bị <b>ghi đè</b> bằng dữ liệu trong file này. Hành động này không thể hoàn tác.</span>
+          </div>
+          <div className="text-[12.5px] mb-4" style={{ color: COLORS.textMuted }}>
+            File sao lưu ngày: {confirmRestore.exported_at ? fmtDate(confirmRestore.exported_at.slice(0, 10)) : "không rõ"}
+          </div>
+          <div className="flex justify-end gap-2 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+            <Btn variant="outline" onClick={() => setConfirmRestore(null)}>Hủy</Btn>
+            <Btn variant="danger" onClick={doRestore}>Xác nhận phục hồi</Btn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Thông báo / nhắc nhở tự động                                        */
+/* ------------------------------------------------------------------ */
+const OVERDUE_DAYS = 30;
+
+function computeNotifications(sales, products) {
+  const notifs = [];
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - OVERDUE_DAYS);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  sales.forEach((inv) => {
+    const unpaid = inv.tong_tien - (inv.da_thanh_toan || 0);
+    if (unpaid > 0 && inv.ngay && inv.ngay < cutoffStr) {
+      const days = Math.floor((Date.now() - new Date(inv.ngay).getTime()) / 86400000);
+      notifs.push({ type: "debt", key: `debt-${inv.id}`, text: `Hóa đơn ${inv.ma} quá hạn ${days} ngày — còn nợ ${fmtVND(unpaid)}`, page: "debt" });
+    }
+  });
+
+  products.forEach((p) => {
+    if ((p.ton_kho || 0) <= (p.ton_toi_thieu || 0)) {
+      notifs.push({ type: "stock", key: `stock-${p.id}`, text: `${p.ten} sắp hết hàng (còn ${p.ton_kho ?? 0} ${p.dvt})`, page: "stock" });
+    }
+  });
+
+  return notifs;
+}
+
+function NotificationsBell({ notifications, onNavigate }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((o) => !o)} className="relative p-1.5 rounded hover:bg-slate-100">
+        <Bell size={18} color={COLORS.textMuted} />
+        {notifications.length > 0 && (
+          <span
+            className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-semibold text-white"
+            style={{ background: COLORS.red }}
+          >
+            {notifications.length > 9 ? "9+" : notifications.length}
+          </span>
+        )}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-2 w-80 max-h-96 overflow-y-auto rounded-lg shadow-xl z-50" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+            <div className="px-3 py-2 text-[12.5px] font-semibold border-b" style={{ borderColor: COLORS.border, color: COLORS.text }}>
+              Thông báo ({notifications.length})
+            </div>
+            {notifications.length === 0 ? (
+              <div className="px-3 py-6 text-center text-[12.5px]" style={{ color: COLORS.textMuted }}>Không có thông báo nào.</div>
+            ) : (
+              notifications.map((n) => (
+                <button
+                  key={n.key}
+                  onClick={() => { onNavigate(n.page); setOpen(false); }}
+                  className="w-full text-left px-3 py-2 text-[12.5px] border-b last:border-b-0 hover:bg-slate-50 flex items-start gap-2"
+                  style={{ borderColor: COLORS.border, color: COLORS.text }}
+                >
+                  {n.type === "debt" ? <CircleDollarSign size={13} className="mt-0.5 shrink-0" color={COLORS.red} /> : <AlertTriangle size={13} className="mt-0.5 shrink-0" color={COLORS.amber} />}
+                  <span>{n.text}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* App shell                                                           */
 /* ------------------------------------------------------------------ */
 export default function App() {
@@ -2999,7 +3268,7 @@ export default function App() {
   }
 
   if (!auth.currentUser) {
-    return <LoginScreen users={auth.users} onLogin={auth.login} bootstrapping={false} />;
+    return <LoginScreen users={auth.users} onLogin={auth.login} bootstrapping={false} updateUser={usersStore.update} />;
   }
 
   const pageMap = {
@@ -3069,7 +3338,20 @@ export default function App() {
     employees: <EmployeesPage store={employeeStore} />,
     payroll: <PayrollPage employees={employeeStore.items} store={payrollStore} />,
     users: <UsersPage store={usersStore} currentUser={auth.currentUser} />,
+    backup: (
+      <BackupPage
+        stores={{
+          products: productStore, customers: customerStore, suppliers: supplierStore,
+          sales: salesStore, purchases: purchaseStore, receipts: receiptStore, payments: paymentStore,
+          vouchers: voucherStore, salereturns: saleReturnStore, purchasereturns: purchaseReturnStore,
+          pricelists: priceListStore, salesorders: salesOrderStore, employees: employeeStore,
+          payroll: payrollStore, channels: channelStore, paymentmethods: paymentMethodStore, users: usersStore,
+        }}
+      />
+    ),
   };
+
+  const notifications = anyLoading ? [] : computeNotifications(salesStore.items, productStore.items);
 
   const currentLabel = NAV_GROUPS.flatMap((g) => g.items).find((i) => i.key === page)?.label || "";
   const activePage = allowedPages && !allowedPages.includes(page) ? "dashboard" : page;
@@ -3095,6 +3377,9 @@ export default function App() {
           <span className="text-[13px] hidden sm:inline" style={{ color: COLORS.textMuted }}>banhang.ntcons</span>
           <ChevronRight size={13} color={COLORS.textMuted} className="hidden sm:inline" />
           <span className="text-[13.5px] font-medium truncate" style={{ color: COLORS.text }}>{currentLabel}</span>
+          <div className="ml-auto">
+            <NotificationsBell notifications={notifications} onNavigate={setPage} />
+          </div>
         </div>
         <div className="p-3 sm:p-6 max-w-[1200px]">
           {anyLoading ? (

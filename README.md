@@ -20,7 +20,9 @@ Web app quản lý **bán hàng · kho · công nợ** cho doanh nghiệp vừa 
 - **Báo cáo thuế (ước tính cơ bản)**: thuế GTGT đầu ra/đầu vào/phải nộp theo tháng, ước tính thuế TNDN
 - **In phiếu / Xuất PDF**: mọi chứng từ đều có thể in qua hộp thoại in của trình duyệt (chọn "Lưu dưới dạng PDF")
 - **Xuất Excel**: các báo cáo (Tồn kho, Công nợ, Sổ quỹ, NXT, Báo cáo kinh doanh, Báo cáo thuế, Bảng lương) đều xuất được file `.xlsx`
-- **Đăng nhập & phân quyền cơ bản**: 4 vai trò — Quản trị viên, Nhân viên bán hàng, Kế toán, Thủ kho — mỗi vai trò chỉ thấy menu phù hợp
+- **Đăng nhập & phân quyền cơ bản**: 4 vai trò — Quản trị viên, Nhân viên bán hàng, Kế toán, Thủ kho — mỗi vai trò chỉ thấy menu phù hợp. Mật khẩu được mã hóa (bcrypt), tài khoản tự khóa 15 phút sau 5 lần đăng nhập sai.
+- **Sao lưu & Phục hồi**: xuất toàn bộ dữ liệu ra 1 file `.json`, phục hồi lại khi cần (có xác nhận trước khi ghi đè)
+- **Thông báo tự động**: chuông thông báo hiển thị hóa đơn quá hạn thanh toán (>30 ngày) và hàng sắp hết tồn kho
 - **Giao diện tối ưu cho di động**: sidebar thu vào ngăn kéo, bảng dữ liệu hiển thị dạng thẻ trên màn hình nhỏ
 - **Đồng bộ đa thiết bị (tùy chọn)**: khi kết nối Postgres, mọi thiết bị/trình duyệt dùng chung một bộ dữ liệu thật qua API trong `api/storage.js`
 
@@ -72,12 +74,13 @@ Bảng dữ liệu (`ntcons_kv`) được tự động tạo trong lần gọi A
 
 ## ⚠️ Lưu ý quan trọng về bảo mật đăng nhập
 
-Lớp đăng nhập/phân quyền trong app này là **phân quyền cơ bản để tổ chức công việc nội bộ**, KHÔNG phải bảo mật cấp doanh nghiệp:
+Lớp đăng nhập/phân quyền trong app này đã được nâng cấp một phần, nhưng vẫn KHÔNG phải bảo mật cấp doanh nghiệp:
 
-- Mật khẩu được lưu ở dạng **chưa mã hóa (plain text)** trong storage.
-- Không có xác thực phía server — bất kỳ ai có quyền truy cập mã nguồn/storage đều có thể xem hoặc chỉnh sửa danh sách tài khoản.
-- Phù hợp để dùng nội bộ với đồng nghiệp/nhân viên đáng tin cậy. **Không phù hợp** nếu cần bảo vệ dữ liệu khỏi người ngoài hoặc dữ liệu nhạy cảm cần tuân thủ quy định bảo mật.
-- Nếu cần bảo mật thật (mã hóa mật khẩu, xác thực JWT/session phía server, HTTPS-only cookies...), cần xây dựng thêm một backend riêng.
+- ✅ Mật khẩu được **mã hóa bằng bcrypt** trước khi lưu (không còn ở dạng chữ thô).
+- ✅ Tài khoản **tự động khóa 15 phút** sau 5 lần đăng nhập sai liên tiếp, chống dò mật khẩu (brute-force).
+- ⚠️ Vẫn **không có xác thực phiên phía server** (session/JWT) — việc "đăng nhập" chỉ quyết định giao diện hiển thị gì trong trình duyệt, không phải một lớp bảo vệ dữ liệu ở tầng API. Ai gọi thẳng API `api/storage.js` (nếu biết `STORAGE_API_SECRET`, hoặc API đang để mở) vẫn đọc/ghi được dữ liệu mà không cần "đăng nhập".
+- Phù hợp để dùng nội bộ với đồng nghiệp/nhân viên đáng tin cậy. **Không phù hợp** nếu cần bảo vệ dữ liệu khỏi người ngoài hoặc dữ liệu nhạy cảm cần tuân thủ quy định bảo mật nghiêm ngặt.
+- Nếu cần bảo mật thật đầy đủ (xác thực JWT/session phía server ràng buộc với từng request tới `api/storage.js`, HTTPS-only cookies...), cần nâng cấp thêm phần backend.
 
 ## Báo cáo thuế — miễn trừ trách nhiệm
 
