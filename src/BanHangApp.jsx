@@ -6,7 +6,7 @@ import {
   TrendingUp, TrendingDown, CircleDollarSign, PackageSearch, Undo2,
   Printer, LogOut, UserCog, Lock, ShieldCheck, Eye, EyeOff,
   Tag, ClipboardList, Contact, Banknote, Landmark, FileSpreadsheet, Store, Percent, Check,
-  CreditCard, BookOpen, ChevronDown, Database, Bell, Upload, RotateCcw
+  CreditCard, BookOpen, ChevronDown, Database, Bell, Upload, RotateCcw, History, ScanLine, Barcode, Minus
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -101,6 +101,7 @@ const STORE_KEYS = {
   payroll: "ntcons:payroll",
   channels: "ntcons:channels",
   paymentmethods: "ntcons:paymentmethods",
+  auditlog: "ntcons:auditlog",
   counters: "ntcons:counters",
 };
 
@@ -126,6 +127,71 @@ async function storageSet(key, value, shared = SHARED) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Nhật ký hoạt động — ghi tự động cho MỌI thay đổi qua useCollection   */
+/* ------------------------------------------------------------------ */
+const STORE_LABELS = {
+  products: "Hàng hóa", customers: "Khách hàng", suppliers: "Nhà cung cấp",
+  sales: "Bán hàng", purchases: "Mua hàng", receipts: "Phiếu thu", payments: "Phiếu chi",
+  vouchers: "Phiếu kho (Nhập/Xuất)", salereturns: "Trả hàng bán", purchasereturns: "Trả hàng mua",
+  pricelists: "Bảng giá", salesorders: "Đơn đặt hàng", employees: "Nhân viên", payroll: "Bảng lương",
+  channels: "Kênh bán hàng", paymentmethods: "Phương thức thanh toán", users: "Người dùng (tài khoản)",
+};
+const STORE_KEY_TO_LABEL = Object.fromEntries(
+  Object.entries(STORE_KEYS).map(([short, full]) => [full, STORE_LABELS[short] || short])
+);
+const ACTION_LABELS = { create: "Tạo mới", update: "Cập nhật", delete: "Xóa", restore: "Khôi phục / nhập lại" };
+
+let CURRENT_ACTOR = "?";
+function setCurrentActor(user) {
+  CURRENT_ACTOR = user ? (user.ten || user.username || "?") : "?";
+}
+
+function describeRow(row) {
+  if (!row) return "";
+  return row.ten || row.ma || row.username || (row.id ? String(row.id) : "");
+}
+
+// The audit-log page reads from a React-state-backed useCollection instance
+// (so it can render live), but logAudit() is called from deep inside other
+// stores' add/update/remove and has no hook context of its own. We solve
+// this by having App() register a ref to the live audit-log store here, so
+// logAudit can push through the SAME store (updating its React state, which
+// also persists to storage) instead of writing to storage directly and
+// leaving the on-screen log stale until a full reload.
+let AUDIT_STORE_REF = null;
+function registerAuditStore(ref) {
+  AUDIT_STORE_REF = ref;
+}
+
+async function logAudit(storeKey, action, row) {
+  if (storeKey === STORE_KEYS.auditlog) return; // never log writes to the log itself
+  const entry = {
+    id: uid("LOG"),
+    ts: new Date().toISOString(),
+    actor: CURRENT_ACTOR,
+    action,
+    module: STORE_KEY_TO_LABEL[storeKey] || storeKey,
+    description: describeRow(row),
+  };
+  const liveStore = AUDIT_STORE_REF?.current;
+  if (liveStore) {
+    // Route through the live store so the Nhật ký hoạt động page updates
+    // immediately, not just after the next full page load.
+    const next = [...(liveStore.items || []), entry].slice(-2000); // keep the log bounded
+    liveStore.persist(next);
+    return;
+  }
+  // Fallback (store not mounted yet): write straight to storage, best-effort.
+  try {
+    const existing = (await storageGet(STORE_KEYS.auditlog)) || [];
+    const next = [...existing, entry].slice(-2000);
+    await storageSet(STORE_KEYS.auditlog, next);
+  } catch (e) {
+    console.error("audit log failed", e);
+  }
+}
+
 function useCollection(storeKey) {
   const [items, setItems] = useState(null); // null = loading
   useEffect(() => {
@@ -139,9 +205,10 @@ function useCollection(storeKey) {
   }, [storeKey]);
 
   const persist = useCallback(
-    (next) => {
+    (next, action = "update") => {
       setItems(next);
       storageSet(storeKey, next);
+      logAudit(storeKey, action, { ten: `${action === "restore" ? "Khôi phục / nhập lại" : "Cập nhật hàng loạt"} ${(next || []).length} bản ghi` });
     },
     [storeKey]
   );
@@ -153,28 +220,38 @@ function useCollection(storeKey) {
         storageSet(storeKey, next);
         return next;
       });
+      logAudit(storeKey, "create", row);
     },
     [storeKey]
   );
 
   const update = useCallback(
     (id, patch) => {
+      let updatedRow = null;
       setItems((cur) => {
-        const next = (cur || []).map((r) => (r.id === id ? { ...r, ...patch } : r));
+        const next = (cur || []).map((r) => {
+          if (r.id !== id) return r;
+          updatedRow = { ...r, ...patch };
+          return updatedRow;
+        });
         storageSet(storeKey, next);
         return next;
       });
+      logAudit(storeKey, "update", updatedRow);
     },
     [storeKey]
   );
 
   const remove = useCallback(
     (id) => {
+      let removedRow = null;
       setItems((cur) => {
+        removedRow = (cur || []).find((r) => r.id === id) || null;
         const next = (cur || []).filter((r) => r.id !== id);
         storageSet(storeKey, next);
         return next;
       });
+      logAudit(storeKey, "delete", removedRow);
     },
     [storeKey]
   );
@@ -302,6 +379,7 @@ const NAV_GROUPS = [
   {
     label: "Giao dịch",
     items: [
+      { key: "pos", label: "Bán hàng nhanh (POS)", icon: ScanLine },
       { key: "salesorders", label: "Đơn đặt hàng", icon: ClipboardList },
       { key: "sales", label: "Bán hàng", icon: ShoppingCart },
       { key: "salereturns", label: "Trả hàng bán", icon: Undo2 },
@@ -348,6 +426,7 @@ const NAV_GROUPS = [
     items: [
       { key: "users", label: "Người dùng", icon: UserCog },
       { key: "backup", label: "Sao lưu & Phục hồi", icon: Database },
+      { key: "auditlog", label: "Nhật ký hoạt động", icon: History },
     ],
   },
 ];
@@ -361,7 +440,7 @@ const ROLE_LABELS = {
 };
 const ROLE_PAGES = {
   admin: null, // null = all pages
-  sales: ["dashboard", "products", "customers", "salesorders", "sales", "salereturns", "stock", "pricelists", "channels"],
+  sales: ["dashboard", "products", "customers", "pos", "salesorders", "sales", "salereturns", "stock", "pricelists", "channels"],
   accountant: ["dashboard", "customers", "suppliers", "receipts", "payments", "soquy", "debt", "reports", "taxreport", "employees", "payroll", "pricelists", "paymentmethods", "nxt"],
   warehouse: ["dashboard", "products", "stockin", "stockout", "stock", "nxt"],
 };
@@ -622,6 +701,7 @@ function ProductsPage({ store }) {
           columns={[
             { key: "ma", label: "Mã hàng" },
             { key: "ten", label: "Tên hàng" },
+            { key: "ma_vach", label: "Mã vạch", render: (r) => r.ma_vach || "—" },
             { key: "dvt", label: "ĐVT" },
             { key: "gia_von", label: "Giá vốn", align: "right", render: (r) => fmtVND(r.gia_von) },
             { key: "gia_ban", label: "Giá bán", align: "right", render: (r) => fmtVND(r.gia_ban) },
@@ -658,6 +738,7 @@ function ProductForm({ initial, onSave, onCancel }) {
     ma: initial.ma || "",
     ten: initial.ten || "",
     dvt: initial.dvt || "Cái",
+    ma_vach: initial.ma_vach || "",
     gia_von: initial.gia_von || 0,
     gia_ban: initial.gia_ban || 0,
     ton_kho: initial.ton_kho ?? 0,
@@ -665,13 +746,31 @@ function ProductForm({ initial, onSave, onCancel }) {
     thue_suat_vat: initial.thue_suat_vat ?? 10,
     id: initial.id,
   });
+  const [donViQuyDoi, setDonViQuyDoi] = useState(initial.don_vi_quy_doi || []);
+  const [scannerOpen, setScannerOpen] = useState(false);
+
+  function addUnit() { setDonViQuyDoi((cur) => [...cur, { ten: "", ty_le: 1 }]); }
+  function updateUnit(idx, patch) { setDonViQuyDoi((cur) => cur.map((u, i) => (i === idx ? { ...u, ...patch } : u))); }
+  function removeUnit(idx) { setDonViQuyDoi((cur) => cur.filter((_, i) => i !== idx)); }
+
+  function submit(e) {
+    e.preventDefault();
+    onSave({ ...f, don_vi_quy_doi: donViQuyDoi.filter((u) => u.ten && u.ty_le > 0) });
+  }
+
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave(f); }}>
+    <form onSubmit={submit}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Mã hàng" required><input required className={inputCls} style={inputStyle} value={f.ma} onChange={(e) => setF({ ...f, ma: e.target.value })} /></Field>
-        <Field label="Đơn vị tính"><input className={inputCls} style={inputStyle} value={f.dvt} onChange={(e) => setF({ ...f, dvt: e.target.value })} /></Field>
+        <Field label="Đơn vị tính cơ bản"><input className={inputCls} style={inputStyle} value={f.dvt} onChange={(e) => setF({ ...f, dvt: e.target.value })} /></Field>
       </div>
       <Field label="Tên hàng hóa" required><input required className={inputCls} style={inputStyle} value={f.ten} onChange={(e) => setF({ ...f, ten: e.target.value })} /></Field>
+      <Field label="Mã vạch">
+        <div className="flex items-center gap-2">
+          <input className={inputCls} style={inputStyle} value={f.ma_vach} onChange={(e) => setF({ ...f, ma_vach: e.target.value })} placeholder="Gõ tay hoặc quét bằng camera..." />
+          <Btn type="button" size="sm" variant="outline" onClick={() => setScannerOpen(true)}><ScanLine size={13.5} /> Quét</Btn>
+        </div>
+      </Field>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Giá vốn"><input type="number" className={inputCls} style={inputStyle} value={f.gia_von} onChange={(e) => setF({ ...f, gia_von: +e.target.value })} /></Field>
         <Field label="Giá bán"><input type="number" className={inputCls} style={inputStyle} value={f.gia_ban} onChange={(e) => setF({ ...f, gia_ban: +e.target.value })} /></Field>
@@ -681,10 +780,35 @@ function ProductForm({ initial, onSave, onCancel }) {
         <Field label="Tồn tối thiểu (cảnh báo)"><input type="number" className={inputCls} style={inputStyle} value={f.ton_toi_thieu} onChange={(e) => setF({ ...f, ton_toi_thieu: +e.target.value })} /></Field>
       </div>
       <Field label="Thuế suất GTGT (%)"><input type="number" min="0" max="100" className={inputCls} style={{ ...inputStyle, width: 120 }} value={f.thue_suat_vat} onChange={(e) => setF({ ...f, thue_suat_vat: +e.target.value })} /></Field>
+
+      <div className="mt-2 mb-2 text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>Đơn vị tính quy đổi (tùy chọn — VD: 1 Thùng = 12 {f.dvt || "Cái"})</div>
+      {donViQuyDoi.length > 0 && (
+        <div className="rounded-md border mb-2" style={{ borderColor: COLORS.border }}>
+          {donViQuyDoi.map((u, idx) => (
+            <div key={idx} className="flex items-center gap-2 px-2.5 py-1.5 border-b last:border-b-0" style={{ borderColor: COLORS.border }}>
+              <input className={inputCls + " flex-1"} style={inputStyle} placeholder="Tên đơn vị (VD: Thùng)" value={u.ten} onChange={(e) => updateUnit(idx, { ten: e.target.value })} />
+              <span className="text-[12px] shrink-0" style={{ color: COLORS.textMuted }}>=</span>
+              <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 80 }} value={u.ty_le} onChange={(e) => updateUnit(idx, { ty_le: +e.target.value })} />
+              <span className="text-[12px] shrink-0" style={{ color: COLORS.textMuted }}>{f.dvt || "Cái"}</span>
+              <button type="button" onClick={() => removeUnit(idx)} className="p-1 rounded hover:bg-slate-100"><X size={14} color={COLORS.textMuted} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      <button type="button" onClick={addUnit} className="mb-3 text-[12.5px] font-medium flex items-center gap-1" style={{ color: COLORS.navy }}>
+        <Plus size={13} /> Thêm đơn vị quy đổi
+      </button>
+
       <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
         <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
         <Btn type="submit">Lưu</Btn>
       </div>
+      {scannerOpen && (
+        <BarcodeScannerModal
+          onClose={() => setScannerOpen(false)}
+          onDetected={(code) => { setF((cur) => ({ ...cur, ma_vach: code })); setScannerOpen(false); }}
+        />
+      )}
     </form>
   );
 }
@@ -1417,6 +1541,229 @@ function SalesOrderForm({ partners, products, priceLists, channels, onSave, onCa
 }
 
 /* ------------------------------------------------------------------ */
+/* Bán hàng nhanh (POS)                                                */
+/* ------------------------------------------------------------------ */
+function POSPage({ products, customers, priceLists, channels, salesStore, productStore }) {
+  const { add: addSale } = salesStore;
+  const { setItems: setProducts } = productStore;
+  const [cart, setCart] = useState([]); // [{ hang_hoa_id, ten, so_luong, don_gia, dvt }]
+  const [customerId, setCustomerId] = useState("");
+  const [search, setSearch] = useState("");
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [tienKhachDua, setTienKhachDua] = useState("");
+  const [lastReceipt, setLastReceipt] = useState(null);
+  const [scanError, setScanError] = useState("");
+
+  const customer = customers.find((c) => c.id === customerId);
+  const priceList = customer?.bang_gia_id ? (priceLists || []).find((pl) => pl.id === customer.bang_gia_id) : null;
+  const chietKhauPct = customer?.chiet_khau_pct || 0;
+
+  function priceFor(product) {
+    if (priceList?.gia?.[product.id] != null) return priceList.gia[product.id];
+    return product.gia_ban;
+  }
+
+  function addToCart(product) {
+    if (!product) return;
+    setScanError("");
+    setCart((cur) => {
+      const idx = cur.findIndex((l) => l.hang_hoa_id === product.id);
+      if (idx >= 0) {
+        const next = [...cur];
+        next[idx] = { ...next[idx], so_luong: next[idx].so_luong + 1 };
+        return next;
+      }
+      return [...cur, { hang_hoa_id: product.id, ten: product.ten, dvt: product.dvt, so_luong: 1, don_gia: priceFor(product) }];
+    });
+  }
+
+  function setQty(id, qty) {
+    if (qty < 1) return;
+    setCart((cur) => cur.map((l) => (l.hang_hoa_id === id ? { ...l, so_luong: qty } : l)));
+  }
+  function removeLine(id) {
+    setCart((cur) => cur.filter((l) => l.hang_hoa_id !== id));
+  }
+
+  const subtotal = cart.reduce((s, l) => s + l.so_luong * l.don_gia, 0);
+  const discountAmount = subtotal * (chietKhauPct / 100);
+  const total = subtotal - discountAmount;
+  const tienThua = Math.max(0, (Number(tienKhachDua) || 0) - total);
+
+  function findByCode(code) {
+    const c = (code || "").trim();
+    if (!c) return null;
+    return products.find((p) => p.ma_vach === c) || products.find((p) => p.ma?.toLowerCase() === c.toLowerCase());
+  }
+
+  function handleSearchEnter(e) {
+    if (e.key !== "Enter") return;
+    const p = findByCode(search);
+    if (p) {
+      addToCart(p);
+      setSearch("");
+    } else {
+      setScanError(`Không tìm thấy hàng hóa khớp với "${search}".`);
+    }
+  }
+
+  function handleScanned(code) {
+    setScannerOpen(false);
+    const p = findByCode(code);
+    if (p) addToCart(p);
+    else setScanError(`Không tìm thấy hàng hóa với mã vạch "${code}".`);
+  }
+
+  function checkout() {
+    if (cart.length === 0) return;
+    const items = cart.map((l) => ({ hang_hoa_id: l.hang_hoa_id, ten: l.ten, so_luong: l.so_luong, don_gia: l.don_gia }));
+    const invoice = {
+      id: uid("HD"),
+      ma: uid("HD").toUpperCase(),
+      ngay: todayStr(),
+      doi_tac_id: customerId || undefined,
+      items,
+      tam_tinh: subtotal,
+      chiet_khau_pct: chietKhauPct,
+      tong_tien: total,
+      da_thanh_toan: total, // POS = thanh toán ngay khi checkout
+    };
+    addSale(invoice);
+    setProducts((cur) => {
+      const next = cur.map((p) => {
+        const line = items.find((it) => it.hang_hoa_id === p.id);
+        if (!line) return p;
+        return { ...p, ton_kho: (p.ton_kho || 0) - line.so_luong };
+      });
+      storageSet(STORE_KEYS.products, next);
+      return next;
+    });
+    setLastReceipt(invoice);
+    setCart([]);
+    setTienKhachDua("");
+    setCustomerId("");
+  }
+
+  const filteredProducts = products.filter(
+    (p) => !search || p.ten?.toLowerCase().includes(search.toLowerCase()) || p.ma?.toLowerCase().includes(search.toLowerCase()) || p.ma_vach?.includes(search)
+  );
+
+  return (
+    <div>
+      <PageHeader
+        title="Bán hàng nhanh"
+        subtitle="Chọn hàng hoặc quét mã vạch để thêm vào giỏ, thanh toán ngay tại quầy"
+        action={<Btn variant="outline" onClick={() => setScannerOpen(true)}><ScanLine size={15} /> Quét mã vạch</Btn>}
+      />
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2">
+          <div className="relative mb-1">
+            <input
+              autoFocus
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setScanError(""); }}
+              onKeyDown={handleSearchEnter}
+              placeholder="Gõ tên/mã hàng để lọc, hoặc quét/gõ mã vạch rồi Enter..."
+              className={inputCls}
+              style={inputStyle}
+            />
+          </div>
+          {scanError && <div className="mb-2 text-[12px]" style={{ color: COLORS.red }}>{scanError}</div>}
+          {filteredProducts.length === 0 ? (
+            <EmptyState icon={Package} title="Không có hàng hóa phù hợp" hint="Thử từ khóa khác hoặc thêm hàng hóa mới." />
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-[65vh] overflow-y-auto pr-1">
+              {filteredProducts.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => addToCart(p)}
+                  className="text-left rounded-lg p-3 hover:shadow-md transition-shadow"
+                  style={{ border: `1px solid ${COLORS.border}`, background: COLORS.surface }}
+                >
+                  <div className="text-[13px] font-medium mb-1 line-clamp-2" style={{ color: COLORS.text }}>{p.ten}</div>
+                  <div className="text-[11.5px]" style={{ color: (p.ton_kho || 0) <= (p.ton_toi_thieu || 0) ? COLORS.red : COLORS.textMuted }}>Tồn: {p.ton_kho ?? 0} {p.dvt}</div>
+                  <div className="text-[13.5px] font-semibold mt-1" style={{ color: COLORS.navy }}>{fmtVND(priceFor(p))}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-lg p-4 flex flex-col" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+          <Field label="Khách hàng">
+            <select className={inputCls} style={inputStyle} value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+              <option value="">Khách lẻ</option>
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.ten}</option>)}
+            </select>
+          </Field>
+          {(priceList || chietKhauPct > 0) && (
+            <div className="mb-2 px-2 py-1.5 rounded text-[11.5px]" style={{ background: COLORS.goldBg, color: "#5C4109" }}>
+              {priceList && <div>Bảng giá: <b>{priceList.ten}</b></div>}
+              {chietKhauPct > 0 && <div>Chiết khấu: <b>{chietKhauPct}%</b></div>}
+            </div>
+          )}
+
+          <div className="flex-1 overflow-y-auto my-2 space-y-2 min-h-[120px]">
+            {cart.length === 0 ? (
+              <div className="text-[12.5px] text-center py-8" style={{ color: COLORS.textMuted }}>Giỏ hàng trống</div>
+            ) : (
+              cart.map((l) => (
+                <div key={l.hang_hoa_id} className="flex items-center gap-2 text-[12.5px]">
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate" style={{ color: COLORS.text }}>{l.ten}</div>
+                    <div style={{ color: COLORS.textMuted }}>{fmtVND(l.don_gia)} / {l.dvt}</div>
+                  </div>
+                  <button type="button" onClick={() => setQty(l.hang_hoa_id, l.so_luong - 1)} className="w-6 h-6 rounded shrink-0" style={{ border: `1px solid ${COLORS.border}` }}>−</button>
+                  <span className="w-6 text-center shrink-0">{l.so_luong}</span>
+                  <button type="button" onClick={() => setQty(l.hang_hoa_id, l.so_luong + 1)} className="w-6 h-6 rounded shrink-0" style={{ border: `1px solid ${COLORS.border}` }}>+</button>
+                  <button type="button" onClick={() => removeLine(l.hang_hoa_id)} className="shrink-0"><X size={14} color={COLORS.red} /></button>
+                </div>
+              ))
+            )}
+          </div>
+
+          {chietKhauPct > 0 && (
+            <div className="flex justify-between text-[12.5px] mb-1">
+              <span style={{ color: COLORS.textMuted }}>Chiết khấu</span>
+              <span style={{ color: COLORS.red }}>-{fmtVND(discountAmount)}</span>
+            </div>
+          )}
+          <div className="flex justify-between text-[16px] font-semibold py-2 my-1" style={{ borderTop: `1px solid ${COLORS.border}`, borderBottom: `1px solid ${COLORS.border}` }}>
+            <span style={{ color: COLORS.text }}>Tổng cộng</span>
+            <span style={{ color: COLORS.navy }}>{fmtVND(total)}</span>
+          </div>
+          <Field label="Tiền khách đưa">
+            <input type="number" min="0" className={inputCls} style={inputStyle} value={tienKhachDua} onChange={(e) => setTienKhachDua(e.target.value)} />
+          </Field>
+          <div className="flex justify-between text-[13px] mb-3">
+            <span style={{ color: COLORS.textMuted }}>Tiền thừa</span>
+            <span style={{ color: COLORS.green, fontWeight: 600 }}>{fmtVND(tienThua)}</span>
+          </div>
+          <Btn onClick={checkout} disabled={cart.length === 0} className="w-full justify-center">Thanh toán</Btn>
+        </div>
+      </div>
+
+      {scannerOpen && <BarcodeScannerModal onClose={() => setScannerOpen(false)} onDetected={handleScanned} />}
+      {lastReceipt && (
+        <PrintDocument
+          onClose={() => setLastReceipt(null)}
+          doc={{
+            title: "Hóa đơn bán hàng",
+            ma: lastReceipt.ma,
+            ngay: lastReceipt.ngay,
+            partnerLabel: "Khách hàng",
+            partnerName: customers.find((c) => c.id === lastReceipt.doi_tac_id)?.ten || "Khách lẻ",
+            items: lastReceipt.items,
+            total: lastReceipt.tong_tien,
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Stock vouchers: Nhập kho / Xuất kho (manual adjustments)             */
 /* ------------------------------------------------------------------ */
 function StockVoucherPage({ type, store, productStore }) {
@@ -1498,26 +1845,54 @@ function StockVoucherPage({ type, store, productStore }) {
 }
 
 function StockVoucherForm({ isIn, products, onSave, onCancel }) {
-  const [f, setF] = useState({ hang_hoa_id: "", so_luong: 1, ngay: todayStr(), ly_do: "" });
+  const [hangHoaId, setHangHoaId] = useState("");
+  const [enteredQty, setEnteredQty] = useState(1);
+  const [unitIdx, setUnitIdx] = useState(0);
+  const [ngay, setNgay] = useState(todayStr());
+  const [lyDo, setLyDo] = useState("");
+
+  const product = products.find((p) => p.id === hangHoaId);
+  const units = [{ ten: product?.dvt || "Cái", ty_le: 1 }, ...((product?.don_vi_quy_doi) || [])];
+  const baseQty = enteredQty * (units[unitIdx]?.ty_le || 1);
+
   function submit(e) {
     e.preventDefault();
-    if (!f.hang_hoa_id) return;
-    onSave({ ...f, ma: uid(isIn ? "PNK" : "PXK").toUpperCase(), ten_hang: products.find((p) => p.id === f.hang_hoa_id)?.ten });
+    if (!hangHoaId) return;
+    onSave({
+      hang_hoa_id: hangHoaId,
+      so_luong: baseQty,
+      ngay,
+      ly_do: lyDo,
+      ma: uid(isIn ? "PNK" : "PXK").toUpperCase(),
+      ten_hang: product?.ten,
+    });
   }
   return (
     <Modal title={isIn ? "Tạo phiếu nhập kho" : "Tạo phiếu xuất kho"} onClose={onCancel}>
       <form onSubmit={submit}>
         <Field label="Hàng hóa" required>
-          <select required className={inputCls} style={inputStyle} value={f.hang_hoa_id} onChange={(e) => setF({ ...f, hang_hoa_id: e.target.value })}>
+          <select required className={inputCls} style={inputStyle} value={hangHoaId} onChange={(e) => { setHangHoaId(e.target.value); setUnitIdx(0); }}>
             <option value="">-- Chọn hàng hóa --</option>
-            {products.map((p) => <option key={p.id} value={p.id}>{p.ten} (tồn: {p.ton_kho ?? 0})</option>)}
+            {products.map((p) => <option key={p.id} value={p.id}>{p.ten} (tồn: {p.ton_kho ?? 0} {p.dvt})</option>)}
           </select>
         </Field>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
-          <Field label="Số lượng" required><input required type="number" min="1" className={inputCls} style={inputStyle} value={f.so_luong} onChange={(e) => setF({ ...f, so_luong: +e.target.value })} /></Field>
-          <Field label="Ngày"><input type="date" className={inputCls} style={inputStyle} value={f.ngay} onChange={(e) => setF({ ...f, ngay: e.target.value })} /></Field>
+          <Field label="Số lượng" required>
+            <div className="flex items-center gap-1.5">
+              <input required type="number" min="1" className={inputCls} style={inputStyle} value={enteredQty} onChange={(e) => setEnteredQty(+e.target.value)} />
+              {units.length > 1 ? (
+                <select className={inputCls} style={{ ...inputStyle, width: 110 }} value={unitIdx} onChange={(e) => setUnitIdx(+e.target.value)}>
+                  {units.map((u, i) => <option key={i} value={i}>{u.ten}</option>)}
+                </select>
+              ) : (
+                <span className="text-[12.5px] shrink-0" style={{ color: COLORS.textMuted }}>{units[0]?.ten}</span>
+              )}
+            </div>
+            {unitIdx > 0 && <div className="text-[11.5px] mt-1" style={{ color: COLORS.textMuted }}>= {baseQty} {product?.dvt}</div>}
+          </Field>
+          <Field label="Ngày"><input type="date" className={inputCls} style={inputStyle} value={ngay} onChange={(e) => setNgay(e.target.value)} /></Field>
         </div>
-        <Field label="Lý do"><input className={inputCls} style={inputStyle} value={f.ly_do} onChange={(e) => setF({ ...f, ly_do: e.target.value })} placeholder={isIn ? "VD: nhập điều chỉnh, chuyển kho..." : "VD: hao hụt, hỏng, chuyển kho..."} /></Field>
+        <Field label="Lý do"><input className={inputCls} style={inputStyle} value={lyDo} onChange={(e) => setLyDo(e.target.value)} placeholder={isIn ? "VD: nhập điều chỉnh, chuyển kho..." : "VD: hao hụt, hỏng, chuyển kho..."} /></Field>
         <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
           <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
           <Btn type="submit">Lưu phiếu</Btn>
@@ -2769,6 +3144,67 @@ function PrintButton({ onClick }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Quét mã vạch bằng camera (dùng chung: ProductForm, POS)             */
+/* ------------------------------------------------------------------ */
+function BarcodeScannerModal({ onClose, onDetected }) {
+  const scannerRef = useRef(null);
+  const [error, setError] = useState("");
+  const [starting, setStarting] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    let scannerInstance = null;
+
+    import("html5-qrcode")
+      .then(({ Html5Qrcode }) => {
+        if (cancelled) return;
+        return Html5Qrcode.getCameras().then((cameras) => {
+          if (cancelled) return;
+          const cameraId = cameras?.[cameras.length - 1]?.id || cameras?.[0]?.id;
+          if (!cameraId) {
+            setError("Không tìm thấy camera trên thiết bị này.");
+            setStarting(false);
+            return;
+          }
+          scannerInstance = new Html5Qrcode("ntcons-barcode-reader");
+          scannerRef.current = scannerInstance;
+          return scannerInstance
+            .start(
+              cameraId,
+              { fps: 10, qrbox: { width: 250, height: 140 } },
+              (decodedText) => onDetected(decodedText),
+              () => {} // per-frame scan miss — ignore, keep scanning
+            )
+            .then(() => setStarting(false));
+        });
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setError("Không mở được camera (có thể trình duyệt chưa cấp quyền, hoặc thiết bị không hỗ trợ).");
+          setStarting(false);
+        }
+        console.error(e);
+      });
+
+    return () => {
+      cancelled = true;
+      if (scannerInstance) {
+        scannerInstance.stop().catch(() => {}).finally(() => scannerInstance.clear?.());
+      }
+    };
+  }, []);
+
+  return (
+    <Modal title="Quét mã vạch" onClose={onClose}>
+      <div id="ntcons-barcode-reader" style={{ width: "100%", minHeight: 220, borderRadius: 8, overflow: "hidden", background: "#111" }} />
+      {starting && !error && <div className="mt-3 text-[12.5px] text-center" style={{ color: COLORS.textMuted }}>Đang mở camera...</div>}
+      {error && <div className="mt-3 text-[12.5px]" style={{ color: COLORS.red }}>{error}</div>}
+      <div className="mt-3 text-[12px]" style={{ color: COLORS.textMuted }}>Đưa mã vạch vào giữa khung hình — hệ thống sẽ tự nhận diện.</div>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Đăng nhập & Quản lý người dùng                                      */
 /* ------------------------------------------------------------------ */
 const SESSION_KEY = "ntcons:session";
@@ -2981,7 +3417,7 @@ function useAuth(usersStore) {
         const sess = await storageGet(SESSION_KEY, false);
         if (sess?.username) {
           const u = list.find((x) => x.username === sess.username);
-          if (u) setCurrentUser(u);
+          if (u) { setCurrentUser(u); setCurrentActor(u); }
         }
       } catch (e) {
         /* ignore — just show the login screen */
@@ -2999,10 +3435,12 @@ function useAuth(usersStore) {
 
   function login(u) {
     setCurrentUser(u);
+    setCurrentActor(u);
     storageSet(SESSION_KEY, { username: u.username }, false);
   }
   function logout() {
     setCurrentUser(null);
+    setCurrentActor(null);
     storageSet(SESSION_KEY, null, false);
   }
 
@@ -3066,7 +3504,7 @@ function BackupPage({ stores }) {
     if (!confirmRestore) return;
     Object.entries(stores).forEach(([key, store]) => {
       const incoming = confirmRestore.data[key];
-      if (Array.isArray(incoming)) store.persist(incoming);
+      if (Array.isArray(incoming)) store.persist(incoming, "restore");
     });
     setConfirmRestore(null);
     setRestored(true);
@@ -3137,6 +3575,58 @@ function BackupPage({ stores }) {
             <Btn variant="danger" onClick={doRestore}>Xác nhận phục hồi</Btn>
           </div>
         </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Nhật ký hoạt động                                                   */
+/* ------------------------------------------------------------------ */
+function AuditLogPage({ store }) {
+  const { items } = store;
+  const [query, setQuery] = useState("");
+
+  const list = [...items]
+    .sort((a, b) => (b.ts || "").localeCompare(a.ts || ""))
+    .filter((e) => !query || [e.module, e.actor, e.description].some((s) => (s || "").toLowerCase().includes(query.toLowerCase())));
+
+  function doExport() {
+    exportExcel("nhat-ky-hoat-dong", [{
+      name: "Nhật ký",
+      rows: list.map((e) => ({
+        "Thời gian": new Date(e.ts).toLocaleString("vi-VN"),
+        "Người thực hiện": e.actor,
+        "Hành động": ACTION_LABELS[e.action] || e.action,
+        "Module": e.module,
+        "Nội dung": e.description,
+      })),
+    }]);
+  }
+
+  const actionTone = { create: "green", update: "amber", delete: "red", restore: "muted" };
+
+  return (
+    <div>
+      <PageHeader title="Nhật ký hoạt động" subtitle="Lịch sử tạo mới / cập nhật / xóa dữ liệu trong hệ thống — tối đa 2.000 hoạt động gần nhất" action={<ExcelButton onClick={doExport} />} />
+      <Toolbar query={query} setQuery={setQuery} placeholder="Tìm theo module, người dùng, nội dung..." />
+      {list.length === 0 ? (
+        <EmptyState icon={History} title="Chưa có hoạt động nào" hint="Nhật ký sẽ tự động ghi lại mỗi khi có người tạo, sửa hoặc xóa dữ liệu." />
+      ) : (
+        <Table
+          columns={[
+            { key: "ts", label: "Thời gian", render: (r) => new Date(r.ts).toLocaleString("vi-VN") },
+            { key: "actor", label: "Người thực hiện" },
+            { key: "action", label: "Hành động", render: (r) => <Badge tone={actionTone[r.action] || "muted"}>{ACTION_LABELS[r.action] || r.action}</Badge> },
+            { key: "module", label: "Module" },
+            { key: "description", label: "Nội dung" },
+          ]}
+          rows={list.slice(0, 300)}
+          rowKey="id"
+        />
+      )}
+      {list.length > 300 && (
+        <div className="mt-2 text-[12px] text-center" style={{ color: COLORS.textMuted }}>Chỉ hiển thị 300 hoạt động gần nhất trên màn hình — dùng "Xuất Excel" để xem toàn bộ.</div>
       )}
     </div>
   );
@@ -3239,6 +3729,10 @@ export default function App() {
   const payrollStore = useCollection(STORE_KEYS.payroll);
   const channelStore = useCollection(STORE_KEYS.channels);
   const paymentMethodStore = useCollection(STORE_KEYS.paymentmethods);
+  const auditLogStore = useCollection(STORE_KEYS.auditlog);
+  const auditStoreRef = useRef(null);
+  auditStoreRef.current = auditLogStore;
+  useEffect(() => { registerAuditStore(auditStoreRef); }, []);
 
   const auth = useAuth(usersStore);
 
@@ -3248,7 +3742,7 @@ export default function App() {
     paymentStore.loading || voucherStore.loading || saleReturnStore.loading ||
     purchaseReturnStore.loading || priceListStore.loading || salesOrderStore.loading ||
     employeeStore.loading || payrollStore.loading || channelStore.loading ||
-    paymentMethodStore.loading;
+    paymentMethodStore.loading || auditLogStore.loading;
 
   const allowedPages = auth.currentUser ? (ROLE_PAGES[auth.currentUser.role] || null) : [];
 
@@ -3289,6 +3783,16 @@ export default function App() {
     suppliers: <PartnerPage store={supplierStore} kind="supplier" />,
     pricelists: <PriceListsPage store={priceListStore} products={productStore.items} />,
     channels: <ChannelsPage store={channelStore} />,
+    pos: (
+      <POSPage
+        products={productStore.items}
+        customers={customerStore.items}
+        priceLists={priceListStore.items}
+        channels={channelStore.items}
+        salesStore={salesStore}
+        productStore={productStore}
+      />
+    ),
     salesorders: (
       <SalesOrdersPage
         store={salesOrderStore}
@@ -3349,6 +3853,7 @@ export default function App() {
         }}
       />
     ),
+    auditlog: <AuditLogPage store={auditLogStore} />,
   };
 
   const notifications = anyLoading ? [] : computeNotifications(salesStore.items, productStore.items);

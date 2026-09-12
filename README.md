@@ -20,6 +20,9 @@ Web app quản lý **bán hàng · kho · công nợ** cho doanh nghiệp vừa 
 - **Báo cáo thuế (ước tính cơ bản)**: thuế GTGT đầu ra/đầu vào/phải nộp theo tháng, ước tính thuế TNDN
 - **In phiếu / Xuất PDF**: mọi chứng từ đều có thể in qua hộp thoại in của trình duyệt (chọn "Lưu dưới dạng PDF")
 - **Xuất Excel**: các báo cáo (Tồn kho, Công nợ, Sổ quỹ, NXT, Báo cáo kinh doanh, Báo cáo thuế, Bảng lương) đều xuất được file `.xlsx`
+- **Bán hàng nhanh (POS)**: lưới chọn hàng, giỏ hàng, quét mã vạch bằng camera, áp dụng bảng giá/chiết khấu khách hàng tự động, tính tiền thừa, thanh toán tạo hóa đơn ngay lập tức
+- **Mã vạch & đơn vị tính quy đổi**: gán mã vạch cho hàng hóa (quét bằng camera hoặc gõ tay), khai báo đơn vị quy đổi (VD: 1 Thùng = 24 Cái) áp dụng khi nhập/xuất kho
+- **Nhật ký hoạt động**: tự động ghi lại mọi lượt tạo mới/cập nhật/xóa dữ liệu trên toàn hệ thống — ai làm, lúc nào, module nào
 - **Đăng nhập & phân quyền cơ bản**: 4 vai trò — Quản trị viên, Nhân viên bán hàng, Kế toán, Thủ kho — mỗi vai trò chỉ thấy menu phù hợp. Mật khẩu được mã hóa (bcrypt), tài khoản tự khóa 15 phút sau 5 lần đăng nhập sai.
 - **Sao lưu & Phục hồi**: xuất toàn bộ dữ liệu ra 1 file `.json`, phục hồi lại khi cần (có xác nhận trước khi ghi đè)
 - **Thông báo tự động**: chuông thông báo hiển thị hóa đơn quá hạn thanh toán (>30 ngày) và hàng sắp hết tồn kho
