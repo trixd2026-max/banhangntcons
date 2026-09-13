@@ -1251,18 +1251,29 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, onCancel,
     return isSale ? prod.gia_ban : prod.gia_von;
   }
 
+  function unitsFor(productId) {
+    const prod = products.find((p) => p.id === productId);
+    return [{ ten: prod?.dvt || "Cái", ty_le: 1 }, ...((prod?.don_vi_quy_doi) || [])];
+  }
+
   function setLine(idx, patch) {
     setLines((cur) => {
       const next = [...cur];
       next[idx] = { ...next[idx], ...patch };
       if (patch.hang_hoa_id) {
+        next[idx].don_vi_idx = 0;
         next[idx].don_gia = priceFor(patch.hang_hoa_id);
+      }
+      if (patch.don_vi_idx !== undefined) {
+        const units = unitsFor(next[idx].hang_hoa_id);
+        const tyLe = units[patch.don_vi_idx]?.ty_le || 1;
+        next[idx].don_gia = Math.round(priceFor(next[idx].hang_hoa_id) * tyLe);
       }
       return next;
     });
   }
   function addLine() {
-    setLines((cur) => [...cur, { hang_hoa_id: "", so_luong: 1, don_gia: 0 }]);
+    setLines((cur) => [...cur, { hang_hoa_id: "", so_luong: 1, don_gia: 0, don_vi_idx: 0 }]);
   }
   function removeLine(idx) {
     setLines((cur) => cur.filter((_, i) => i !== idx));
@@ -1272,7 +1283,16 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, onCancel,
     e.preventDefault();
     const validLines = lines.filter((l) => l.hang_hoa_id && l.so_luong > 0);
     if (!doiTacId || validLines.length === 0) return;
-    const withNames = validLines.map((l) => ({ ...l, ten: products.find((p) => p.id === l.hang_hoa_id)?.ten || "" }));
+    const withNames = validLines.map((l) => {
+      const units = unitsFor(l.hang_hoa_id);
+      const tyLe = units[l.don_vi_idx || 0]?.ty_le || 1;
+      return {
+        hang_hoa_id: l.hang_hoa_id,
+        ten: products.find((p) => p.id === l.hang_hoa_id)?.ten || "",
+        so_luong: (Number(l.so_luong) || 0) * tyLe, // converted to base units
+        don_gia: tyLe > 1 ? Math.round((Number(l.don_gia) || 0) / tyLe) : (Number(l.don_gia) || 0), // converted to per-base-unit price
+      };
+    });
     onSave({
       ma: uid(isSale ? "HD" : "PN").toUpperCase(),
       ngay,
@@ -1317,20 +1337,30 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, onCancel,
 
         <div className="mt-1 mb-2 text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>Chi tiết hàng hóa</div>
         <div className="rounded-md border overflow-x-auto" style={{ borderColor: COLORS.border }}>
-          {lines.map((l, idx) => (
-            <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0 min-w-[600px]" style={{ borderColor: COLORS.border }}>
-              <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
-                <option value="">-- Chọn hàng hóa --</option>
-                {products.map((p) => <option key={p.id} value={p.id}>{p.ten} ({p.ton_kho ?? 0} {p.dvt})</option>)}
-              </select>
-              <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 70 }} value={l.so_luong} onChange={(e) => setLine(idx, { so_luong: +e.target.value })} />
-              <input type="number" min="0" className={inputCls} style={{ ...inputStyle, width: 120 }} value={l.don_gia} onChange={(e) => setLine(idx, { don_gia: +e.target.value })} />
-              <div className="w-28 text-right text-[13px]" style={{ color: COLORS.text }}>{fmtVND((l.so_luong || 0) * (l.don_gia || 0))}</div>
-              <button type="button" onClick={() => removeLine(idx)} className="p-1 rounded hover:bg-slate-100">
-                <X size={14} color={COLORS.textMuted} />
-              </button>
-            </div>
-          ))}
+          {lines.map((l, idx) => {
+            const lineUnits = unitsFor(l.hang_hoa_id);
+            return (
+              <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0 min-w-[680px]" style={{ borderColor: COLORS.border }}>
+                <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
+                  <option value="">-- Chọn hàng hóa --</option>
+                  {products.map((p) => <option key={p.id} value={p.id}>{p.ten} ({p.ton_kho ?? 0} {p.dvt})</option>)}
+                </select>
+                <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 65 }} value={l.so_luong} onChange={(e) => setLine(idx, { so_luong: +e.target.value })} />
+                {lineUnits.length > 1 ? (
+                  <select className={inputCls} style={{ ...inputStyle, width: 95 }} value={l.don_vi_idx || 0} onChange={(e) => setLine(idx, { don_vi_idx: +e.target.value })}>
+                    {lineUnits.map((u, i) => <option key={i} value={i}>{u.ten}</option>)}
+                  </select>
+                ) : (
+                  <span className="text-[12px] w-16 shrink-0" style={{ color: COLORS.textMuted }}>{lineUnits[0]?.ten}</span>
+                )}
+                <input type="number" min="0" className={inputCls} style={{ ...inputStyle, width: 110 }} value={l.don_gia} onChange={(e) => setLine(idx, { don_gia: +e.target.value })} />
+                <div className="w-28 text-right text-[13px]" style={{ color: COLORS.text }}>{fmtVND((l.so_luong || 0) * (l.don_gia || 0))}</div>
+                <button type="button" onClick={() => removeLine(idx)} className="p-1 rounded hover:bg-slate-100">
+                  <X size={14} color={COLORS.textMuted} />
+                </button>
+              </div>
+            );
+          })}
         </div>
         <button type="button" onClick={addLine} className="mt-2 text-[12.5px] font-medium flex items-center gap-1" style={{ color: COLORS.navy }}>
           <Plus size={13} /> Thêm dòng hàng
@@ -1465,31 +1495,54 @@ function SalesOrderForm({ partners, products, priceLists, channels, onSave, onCa
   const [ngay, setNgay] = useState(todayStr());
   const [ngayGiao, setNgayGiao] = useState("");
   const [ghiChu, setGhiChu] = useState("");
-  const [lines, setLines] = useState([{ hang_hoa_id: "", so_luong: 1, don_gia: 0 }]);
+  const [lines, setLines] = useState([{ hang_hoa_id: "", so_luong: 1, don_gia: 0, don_vi_idx: 0 }]);
 
   const customer = partners.find((p) => p.id === doiTacId);
   const priceList = customer?.bang_gia_id ? (priceLists || []).find((pl) => pl.id === customer.bang_gia_id) : null;
   const total = lines.reduce((s, l) => s + (Number(l.so_luong) || 0) * (Number(l.don_gia) || 0), 0);
+
+  function unitsFor(productId) {
+    const prod = products.find((p) => p.id === productId);
+    return [{ ten: prod?.dvt || "Cái", ty_le: 1 }, ...((prod?.don_vi_quy_doi) || [])];
+  }
+  function basePriceFor(productId) {
+    const prod = products.find((p) => p.id === productId);
+    return priceList?.gia?.[productId] ?? prod?.gia_ban ?? 0;
+  }
 
   function setLine(idx, patch) {
     setLines((cur) => {
       const next = [...cur];
       next[idx] = { ...next[idx], ...patch };
       if (patch.hang_hoa_id) {
-        const prod = products.find((p) => p.id === patch.hang_hoa_id);
-        next[idx].don_gia = priceList?.gia?.[patch.hang_hoa_id] ?? prod?.gia_ban ?? 0;
+        next[idx].don_vi_idx = 0;
+        next[idx].don_gia = basePriceFor(patch.hang_hoa_id);
+      }
+      if (patch.don_vi_idx !== undefined) {
+        const units = unitsFor(next[idx].hang_hoa_id);
+        const tyLe = units[patch.don_vi_idx]?.ty_le || 1;
+        next[idx].don_gia = Math.round(basePriceFor(next[idx].hang_hoa_id) * tyLe);
       }
       return next;
     });
   }
-  function addLine() { setLines((cur) => [...cur, { hang_hoa_id: "", so_luong: 1, don_gia: 0 }]); }
+  function addLine() { setLines((cur) => [...cur, { hang_hoa_id: "", so_luong: 1, don_gia: 0, don_vi_idx: 0 }]); }
   function removeLine(idx) { setLines((cur) => cur.filter((_, i) => i !== idx)); }
 
   function submit(e) {
     e.preventDefault();
     const validLines = lines.filter((l) => l.hang_hoa_id && l.so_luong > 0);
     if (!doiTacId || validLines.length === 0) return;
-    const withNames = validLines.map((l) => ({ ...l, ten: products.find((p) => p.id === l.hang_hoa_id)?.ten || "" }));
+    const withNames = validLines.map((l) => {
+      const units = unitsFor(l.hang_hoa_id);
+      const tyLe = units[l.don_vi_idx || 0]?.ty_le || 1;
+      return {
+        hang_hoa_id: l.hang_hoa_id,
+        ten: products.find((p) => p.id === l.hang_hoa_id)?.ten || "",
+        so_luong: (Number(l.so_luong) || 0) * tyLe,
+        don_gia: tyLe > 1 ? Math.round((Number(l.don_gia) || 0) / tyLe) : (Number(l.don_gia) || 0),
+      };
+    });
     onSave({ ma: uid("DH").toUpperCase(), ngay, ngay_giao: ngayGiao, doi_tac_id: doiTacId, items: withNames, tong_tien: total, ghi_chu: ghiChu });
   }
 
@@ -1508,18 +1561,28 @@ function SalesOrderForm({ partners, products, priceLists, channels, onSave, onCa
         </div>
         <div className="mt-1 mb-2 text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>Chi tiết hàng hóa</div>
         <div className="rounded-md border overflow-x-auto" style={{ borderColor: COLORS.border }}>
-          {lines.map((l, idx) => (
-            <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0 min-w-[600px]" style={{ borderColor: COLORS.border }}>
-              <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
-                <option value="">-- Chọn hàng hóa --</option>
-                {products.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
-              </select>
-              <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 70 }} value={l.so_luong} onChange={(e) => setLine(idx, { so_luong: +e.target.value })} />
-              <input type="number" min="0" className={inputCls} style={{ ...inputStyle, width: 120 }} value={l.don_gia} onChange={(e) => setLine(idx, { don_gia: +e.target.value })} />
-              <div className="w-28 text-right text-[13px]" style={{ color: COLORS.text }}>{fmtVND((l.so_luong || 0) * (l.don_gia || 0))}</div>
-              <button type="button" onClick={() => removeLine(idx)} className="p-1 rounded hover:bg-slate-100"><X size={14} color={COLORS.textMuted} /></button>
-            </div>
-          ))}
+          {lines.map((l, idx) => {
+            const lineUnits = unitsFor(l.hang_hoa_id);
+            return (
+              <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0 min-w-[680px]" style={{ borderColor: COLORS.border }}>
+                <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
+                  <option value="">-- Chọn hàng hóa --</option>
+                  {products.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
+                </select>
+                <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 65 }} value={l.so_luong} onChange={(e) => setLine(idx, { so_luong: +e.target.value })} />
+                {lineUnits.length > 1 ? (
+                  <select className={inputCls} style={{ ...inputStyle, width: 95 }} value={l.don_vi_idx || 0} onChange={(e) => setLine(idx, { don_vi_idx: +e.target.value })}>
+                    {lineUnits.map((u, i) => <option key={i} value={i}>{u.ten}</option>)}
+                  </select>
+                ) : (
+                  <span className="text-[12px] w-16 shrink-0" style={{ color: COLORS.textMuted }}>{lineUnits[0]?.ten}</span>
+                )}
+                <input type="number" min="0" className={inputCls} style={{ ...inputStyle, width: 110 }} value={l.don_gia} onChange={(e) => setLine(idx, { don_gia: +e.target.value })} />
+                <div className="w-28 text-right text-[13px]" style={{ color: COLORS.text }}>{fmtVND((l.so_luong || 0) * (l.don_gia || 0))}</div>
+                <button type="button" onClick={() => removeLine(idx)} className="p-1 rounded hover:bg-slate-100"><X size={14} color={COLORS.textMuted} /></button>
+              </div>
+            );
+          })}
         </div>
         <button type="button" onClick={addLine} className="mt-2 text-[12.5px] font-medium flex items-center gap-1" style={{ color: COLORS.navy }}>
           <Plus size={13} /> Thêm dòng hàng
@@ -2996,8 +3059,13 @@ function ReturnForm({ isSaleReturn, invoices, partners, products, onSave, onCanc
   const [doiTacId, setDoiTacId] = useState("");
   const [ngay, setNgay] = useState(todayStr());
   const [lyDo, setLyDo] = useState("");
-  const [lines, setLines] = useState([{ hang_hoa_id: "", so_luong: 1, don_gia: 0 }]);
+  const [lines, setLines] = useState([{ hang_hoa_id: "", so_luong: 1, don_gia: 0, don_vi_idx: 0 }]);
   const total = lines.reduce((s, l) => s + (Number(l.so_luong) || 0) * (Number(l.don_gia) || 0), 0);
+
+  function unitsFor(productId) {
+    const prod = products.find((p) => p.id === productId);
+    return [{ ten: prod?.dvt || "Cái", ty_le: 1 }, ...((prod?.don_vi_quy_doi) || [])];
+  }
 
   function setLine(idx, patch) {
     setLines((cur) => {
@@ -3005,19 +3073,36 @@ function ReturnForm({ isSaleReturn, invoices, partners, products, onSave, onCanc
       next[idx] = { ...next[idx], ...patch };
       if (patch.hang_hoa_id) {
         const prod = products.find((p) => p.id === patch.hang_hoa_id);
+        next[idx].don_vi_idx = 0;
         if (prod) next[idx].don_gia = isSaleReturn ? prod.gia_ban : prod.gia_von;
+      }
+      if (patch.don_vi_idx !== undefined) {
+        const prod = products.find((p) => p.id === next[idx].hang_hoa_id);
+        const units = unitsFor(next[idx].hang_hoa_id);
+        const tyLe = units[patch.don_vi_idx]?.ty_le || 1;
+        const basePrice = prod ? (isSaleReturn ? prod.gia_ban : prod.gia_von) : 0;
+        next[idx].don_gia = Math.round(basePrice * tyLe);
       }
       return next;
     });
   }
-  function addLine() { setLines((cur) => [...cur, { hang_hoa_id: "", so_luong: 1, don_gia: 0 }]); }
+  function addLine() { setLines((cur) => [...cur, { hang_hoa_id: "", so_luong: 1, don_gia: 0, don_vi_idx: 0 }]); }
   function removeLine(idx) { setLines((cur) => cur.filter((_, i) => i !== idx)); }
 
   function submit(e) {
     e.preventDefault();
     const validLines = lines.filter((l) => l.hang_hoa_id && l.so_luong > 0);
     if (!doiTacId || validLines.length === 0) return;
-    const withNames = validLines.map((l) => ({ ...l, ten: products.find((p) => p.id === l.hang_hoa_id)?.ten || "" }));
+    const withNames = validLines.map((l) => {
+      const units = unitsFor(l.hang_hoa_id);
+      const tyLe = units[l.don_vi_idx || 0]?.ty_le || 1;
+      return {
+        hang_hoa_id: l.hang_hoa_id,
+        ten: products.find((p) => p.id === l.hang_hoa_id)?.ten || "",
+        so_luong: (Number(l.so_luong) || 0) * tyLe,
+        don_gia: tyLe > 1 ? Math.round((Number(l.don_gia) || 0) / tyLe) : (Number(l.don_gia) || 0),
+      };
+    });
     onSave({ ma: uid(isSaleReturn ? "THB" : "THM").toUpperCase(), ngay, doi_tac_id: doiTacId, items: withNames, tong_tien: total, ly_do: lyDo });
   }
 
@@ -3035,18 +3120,28 @@ function ReturnForm({ isSaleReturn, invoices, partners, products, onSave, onCanc
         </div>
         <div className="mt-1 mb-2 text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>Chi tiết hàng trả</div>
         <div className="rounded-md border overflow-x-auto" style={{ borderColor: COLORS.border }}>
-          {lines.map((l, idx) => (
-            <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0 min-w-[600px]" style={{ borderColor: COLORS.border }}>
-              <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
-                <option value="">-- Chọn hàng hóa --</option>
-                {products.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
-              </select>
-              <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 70 }} value={l.so_luong} onChange={(e) => setLine(idx, { so_luong: +e.target.value })} />
-              <input type="number" min="0" className={inputCls} style={{ ...inputStyle, width: 120 }} value={l.don_gia} onChange={(e) => setLine(idx, { don_gia: +e.target.value })} />
-              <div className="w-28 text-right text-[13px]" style={{ color: COLORS.text }}>{fmtVND((l.so_luong || 0) * (l.don_gia || 0))}</div>
-              <button type="button" onClick={() => removeLine(idx)} className="p-1 rounded hover:bg-slate-100"><X size={14} color={COLORS.textMuted} /></button>
-            </div>
-          ))}
+          {lines.map((l, idx) => {
+            const lineUnits = unitsFor(l.hang_hoa_id);
+            return (
+              <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0 min-w-[680px]" style={{ borderColor: COLORS.border }}>
+                <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
+                  <option value="">-- Chọn hàng hóa --</option>
+                  {products.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
+                </select>
+                <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 65 }} value={l.so_luong} onChange={(e) => setLine(idx, { so_luong: +e.target.value })} />
+                {lineUnits.length > 1 ? (
+                  <select className={inputCls} style={{ ...inputStyle, width: 95 }} value={l.don_vi_idx || 0} onChange={(e) => setLine(idx, { don_vi_idx: +e.target.value })}>
+                    {lineUnits.map((u, i) => <option key={i} value={i}>{u.ten}</option>)}
+                  </select>
+                ) : (
+                  <span className="text-[12px] w-16 shrink-0" style={{ color: COLORS.textMuted }}>{lineUnits[0]?.ten}</span>
+                )}
+                <input type="number" min="0" className={inputCls} style={{ ...inputStyle, width: 110 }} value={l.don_gia} onChange={(e) => setLine(idx, { don_gia: +e.target.value })} />
+                <div className="w-28 text-right text-[13px]" style={{ color: COLORS.text }}>{fmtVND((l.so_luong || 0) * (l.don_gia || 0))}</div>
+                <button type="button" onClick={() => removeLine(idx)} className="p-1 rounded hover:bg-slate-100"><X size={14} color={COLORS.textMuted} /></button>
+              </div>
+            );
+          })}
         </div>
         <button type="button" onClick={addLine} className="mt-2 text-[12.5px] font-medium flex items-center gap-1" style={{ color: COLORS.navy }}>
           <Plus size={13} /> Thêm dòng hàng
