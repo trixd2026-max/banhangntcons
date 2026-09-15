@@ -4,13 +4,13 @@ import {
   ArrowDownToLine, ArrowUpFromLine, Wallet, HandCoins, Boxes, FileBarChart,
   Plus, Pencil, Trash2, X, Search, ChevronRight, AlertTriangle, Menu,
   TrendingUp, TrendingDown, CircleDollarSign, PackageSearch, Undo2,
-  Printer, LogOut, UserCog, Lock, ShieldCheck, Eye, EyeOff,
-  Tag, ClipboardList, Contact, Banknote, Landmark, FileSpreadsheet, Store, Percent, Check,
-  CreditCard, BookOpen, ChevronDown, Database, Bell, Upload, RotateCcw, History, ScanLine, Barcode, Minus
+  Printer, LogOut, UserCog, ShieldCheck, Eye, EyeOff,
+  Tag, ClipboardList, Contact, Banknote, Landmark, FileSpreadsheet, Store, Percent,
+  CreditCard, BookOpen, Database, Bell, Upload, History, ScanLine
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  BarChart, Bar, Legend, PieChart, Pie, Cell
+  BarChart, Bar, Legend
 } from "recharts";
 import * as XLSX from "xlsx";
 import bcrypt from "bcryptjs";
@@ -102,6 +102,8 @@ const STORE_KEYS = {
   channels: "ntcons:channels",
   paymentmethods: "ntcons:paymentmethods",
   auditlog: "ntcons:auditlog",
+  warehouses: "ntcons:warehouses",
+  einvoiceconfig: "ntcons:einvoiceconfig",
   counters: "ntcons:counters",
 };
 
@@ -136,6 +138,7 @@ const STORE_LABELS = {
   vouchers: "Phiếu kho (Nhập/Xuất)", salereturns: "Trả hàng bán", purchasereturns: "Trả hàng mua",
   pricelists: "Bảng giá", salesorders: "Đơn đặt hàng", employees: "Nhân viên", payroll: "Bảng lương",
   channels: "Kênh bán hàng", paymentmethods: "Phương thức thanh toán", users: "Người dùng (tài khoản)",
+  warehouses: "Kho / Chi nhánh",
 };
 const STORE_KEY_TO_LABEL = Object.fromEntries(
   Object.entries(STORE_KEYS).map(([short, full]) => [full, STORE_LABELS[short] || short])
@@ -374,6 +377,7 @@ const NAV_GROUPS = [
       { key: "customers", label: "Khách hàng", icon: Users },
       { key: "suppliers", label: "Nhà cung cấp", icon: Truck },
       { key: "paymentmethods", label: "Phương thức thanh toán", icon: CreditCard },
+      { key: "warehouses", label: "Kho / Chi nhánh", icon: Store },
     ],
   },
   {
@@ -387,6 +391,7 @@ const NAV_GROUPS = [
       { key: "purchasereturns", label: "Trả hàng mua", icon: Undo2 },
       { key: "stockin", label: "Nhập kho", icon: ArrowDownToLine },
       { key: "stockout", label: "Xuất kho", icon: ArrowUpFromLine },
+      { key: "stocktransfer", label: "Chuyển kho", icon: Truck },
     ],
   },
   {
@@ -427,6 +432,7 @@ const NAV_GROUPS = [
       { key: "users", label: "Người dùng", icon: UserCog },
       { key: "backup", label: "Sao lưu & Phục hồi", icon: Database },
       { key: "auditlog", label: "Nhật ký hoạt động", icon: History },
+      { key: "einvoice", label: "Hóa đơn điện tử", icon: FileSpreadsheet },
     ],
   },
 ];
@@ -442,13 +448,8 @@ const ROLE_PAGES = {
   admin: null, // null = all pages
   sales: ["dashboard", "products", "customers", "pos", "salesorders", "sales", "salereturns", "stock", "pricelists", "channels"],
   accountant: ["dashboard", "customers", "suppliers", "receipts", "payments", "soquy", "debt", "reports", "taxreport", "employees", "payroll", "pricelists", "paymentmethods", "nxt"],
-  warehouse: ["dashboard", "products", "stockin", "stockout", "stock", "nxt"],
+  warehouse: ["dashboard", "products", "stockin", "stockout", "stocktransfer", "stock", "nxt", "warehouses"],
 };
-function pagesForRole(role) {
-  const allowed = ROLE_PAGES[role];
-  if (!allowed) return NAV_GROUPS.flatMap((g) => g.items.map((i) => i.key));
-  return allowed;
-}
 
 function Sidebar({ page, setPage, collapsed, setCollapsed, allowedPages, user, onLogout, mobileOpen, onCloseMobile }) {
   function goTo(key) {
@@ -670,7 +671,7 @@ function Table({ columns, rows, onEdit, onDelete, onPrint, rowKey = "id" }) {
 /* ------------------------------------------------------------------ */
 /* Danh mục: Products / Customers / Suppliers (generic CRUD)           */
 /* ------------------------------------------------------------------ */
-function ProductsPage({ store }) {
+function ProductsPage({ store, warehouses }) {
   const { items, add, update, remove } = store;
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState(null); // null | {} | row
@@ -723,7 +724,7 @@ function ProductsPage({ store }) {
       )}
       {editing && (
         <Modal title={editing.id ? "Sửa hàng hóa" : "Thêm hàng hóa"} onClose={() => setEditing(null)}>
-          <ProductForm initial={editing} onCancel={() => setEditing(null)} onSave={save} />
+          <ProductForm initial={editing} warehouses={warehouses} onCancel={() => setEditing(null)} onSave={save} />
         </Modal>
       )}
       {toDelete && (
@@ -733,7 +734,7 @@ function ProductsPage({ store }) {
   );
 }
 
-function ProductForm({ initial, onSave, onCancel }) {
+function ProductForm({ initial, warehouses, onSave, onCancel }) {
   const [f, setF] = useState({
     ma: initial.ma || "",
     ten: initial.ten || "",
@@ -748,6 +749,8 @@ function ProductForm({ initial, onSave, onCancel }) {
   });
   const [donViQuyDoi, setDonViQuyDoi] = useState(initial.don_vi_quy_doi || []);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [tonKhoTheoKho, setTonKhoTheoKho] = useState(initial.ton_kho_theo_kho || {});
+  const useWarehouseBreakdown = warehouses && warehouses.length > 1;
 
   function addUnit() { setDonViQuyDoi((cur) => [...cur, { ten: "", ty_le: 1 }]); }
   function updateUnit(idx, patch) { setDonViQuyDoi((cur) => cur.map((u, i) => (i === idx ? { ...u, ...patch } : u))); }
@@ -755,7 +758,12 @@ function ProductForm({ initial, onSave, onCancel }) {
 
   function submit(e) {
     e.preventDefault();
-    onSave({ ...f, don_vi_quy_doi: donViQuyDoi.filter((u) => u.ten && u.ty_le > 0) });
+    const payload = { ...f, don_vi_quy_doi: donViQuyDoi.filter((u) => u.ten && u.ty_le > 0) };
+    if (useWarehouseBreakdown) {
+      payload.ton_kho_theo_kho = tonKhoTheoKho;
+      payload.ton_kho = warehouses.reduce((s, w) => s + (Number(tonKhoTheoKho[w.id]) || 0), 0);
+    }
+    onSave(payload);
   }
 
   return (
@@ -776,7 +784,22 @@ function ProductForm({ initial, onSave, onCancel }) {
         <Field label="Giá bán"><input type="number" className={inputCls} style={inputStyle} value={f.gia_ban} onChange={(e) => setF({ ...f, gia_ban: +e.target.value })} /></Field>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
-        <Field label="Tồn kho hiện tại"><input type="number" className={inputCls} style={inputStyle} value={f.ton_kho} onChange={(e) => setF({ ...f, ton_kho: +e.target.value })} /></Field>
+        {useWarehouseBreakdown ? (
+          <div className="sm:col-span-2">
+            <span className="block text-[12.5px] font-medium mb-1" style={{ color: COLORS.textMuted }}>Tồn kho hiện tại theo từng kho</span>
+            <div className="rounded-md border mb-1" style={{ borderColor: COLORS.border }}>
+              {warehouses.map((w) => (
+                <div key={w.id} className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-b last:border-b-0" style={{ borderColor: COLORS.border }}>
+                  <span className="text-[13px]" style={{ color: COLORS.text }}>{w.ten}</span>
+                  <input type="number" className={inputCls} style={{ ...inputStyle, width: 100 }} value={tonKhoTheoKho[w.id] ?? 0} onChange={(e) => setTonKhoTheoKho((cur) => ({ ...cur, [w.id]: +e.target.value }))} />
+                </div>
+              ))}
+            </div>
+            <div className="text-[12px] mb-2" style={{ color: COLORS.textMuted }}>Tổng tồn kho: {warehouses.reduce((s, w) => s + (Number(tonKhoTheoKho[w.id]) || 0), 0)} {f.dvt}</div>
+          </div>
+        ) : (
+          <Field label="Tồn kho hiện tại"><input type="number" className={inputCls} style={inputStyle} value={f.ton_kho} onChange={(e) => setF({ ...f, ton_kho: +e.target.value })} /></Field>
+        )}
         <Field label="Tồn tối thiểu (cảnh báo)"><input type="number" className={inputCls} style={inputStyle} value={f.ton_toi_thieu} onChange={(e) => setF({ ...f, ton_toi_thieu: +e.target.value })} /></Field>
       </div>
       <Field label="Thuế suất GTGT (%)"><input type="number" min="0" max="100" className={inputCls} style={{ ...inputStyle, width: 120 }} value={f.thue_suat_vat} onChange={(e) => setF({ ...f, thue_suat_vat: +e.target.value })} /></Field>
@@ -1082,9 +1105,156 @@ function ChannelForm({ initial, onSave, onCancel }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Kho / Chi nhánh                                                     */
+/* ------------------------------------------------------------------ */
+function WarehousesPage({ store }) {
+  const { items, add, update, remove } = store;
+  const [editing, setEditing] = useState(null);
+  const [toDelete, setToDelete] = useState(null);
+
+  function save(form) {
+    if (form.id) update(form.id, form);
+    else add({ ...form, id: uid("KHO") });
+    setEditing(null);
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Kho / Chi nhánh"
+        subtitle="Các địa điểm lưu trữ hàng hóa — tồn kho sẽ được theo dõi riêng theo từng kho"
+        action={<Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm kho</Btn>}
+      />
+      {items.length === 0 ? (
+        <EmptyState
+          icon={Store}
+          title="Chưa có kho / chi nhánh nào"
+          hint="Nếu shop chỉ có 1 địa điểm, bạn không cần tạo kho — hệ thống mặc định coi như 1 kho chung. Chỉ tạo khi có từ 2 địa điểm trở lên."
+          action={<Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm kho</Btn>}
+        />
+      ) : (
+        <Table
+          columns={[
+            { key: "ten", label: "Tên kho / chi nhánh" },
+            { key: "dia_chi", label: "Địa chỉ" },
+          ]}
+          rows={items}
+          onEdit={setEditing}
+          onDelete={setToDelete}
+        />
+      )}
+      {items.length === 1 && (
+        <div className="mt-3 px-3 py-2 rounded-md text-[12px]" style={{ background: COLORS.goldBg, color: "#5C4109" }}>
+          Bạn mới có 1 kho nên các form giao dịch sẽ không hiện ô chọn kho (mặc định dùng kho này). Thêm kho thứ 2 để bắt đầu chọn kho khi giao dịch.
+        </div>
+      )}
+      {editing && (
+        <Modal title={editing.id ? "Sửa kho" : "Thêm kho"} onClose={() => setEditing(null)}>
+          <WarehouseForm initial={editing} onCancel={() => setEditing(null)} onSave={save} />
+        </Modal>
+      )}
+      {toDelete && (
+        <ConfirmBar text={`Xóa "${toDelete.ten}"? Lưu ý: tồn kho đã ghi nhận cho kho này sẽ không tự động chuyển sang kho khác.`} onConfirm={() => { remove(toDelete.id); setToDelete(null); }} onCancel={() => setToDelete(null)} />
+      )}
+    </div>
+  );
+}
+
+function WarehouseForm({ initial, onSave, onCancel }) {
+  const [f, setF] = useState({ ten: initial.ten || "", dia_chi: initial.dia_chi || "", id: initial.id });
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSave(f); }}>
+      <Field label="Tên kho / chi nhánh" required><input required className={inputCls} style={inputStyle} value={f.ten} onChange={(e) => setF({ ...f, ten: e.target.value })} placeholder="VD: Kho chính, Chi nhánh Quận 1..." /></Field>
+      <Field label="Địa chỉ"><input className={inputCls} style={inputStyle} value={f.dia_chi} onChange={(e) => setF({ ...f, dia_chi: e.target.value })} /></Field>
+      <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+        <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
+        <Btn type="submit">Lưu</Btn>
+      </div>
+    </form>
+  );
+}
+
+/* Helper: apply a stock delta to a product, updating both the total ton_kho
+   (used everywhere else in the app — reports, NXT, low-stock alerts...) and,
+   when a warehouse is specified, the per-warehouse breakdown too. This keeps
+   every existing calculation working unchanged while adding location detail
+   on top for shops that use it. */
+function adjustProductStock(product, delta, whId) {
+  const next = { ...product, ton_kho: (product.ton_kho || 0) + delta };
+  if (whId) {
+    const breakdown = { ...(product.ton_kho_theo_kho || {}) };
+    breakdown[whId] = (breakdown[whId] || 0) + delta;
+    next.ton_kho_theo_kho = breakdown;
+  }
+  return next;
+}
+
+/* ------------------------------------------------------------------ */
+/* Hóa đơn điện tử — cấu hình đánh số (chưa nộp thuế điện tử thật)      */
+/* ------------------------------------------------------------------ */
+const EINVOICE_PROVIDERS = ["Viettel S-Invoice", "MISA meInvoice", "VNPT Invoice", "Khác / chưa chọn"];
+
+function EInvoiceSettingsPage({ store }) {
+  const { items, persist } = store;
+  const config = items[0] || null;
+  const [f, setF] = useState({
+    nha_cung_cap: config?.nha_cung_cap || EINVOICE_PROVIDERS[3],
+    mau_so: config?.mau_so || "1",
+    ky_hieu: config?.ky_hieu || "",
+    so_hien_tai: config?.so_hien_tai ?? 1,
+  });
+  const [saved, setSaved] = useState(false);
+
+  function submit(e) {
+    e.preventDefault();
+    persist([{ id: "EINV_CONFIG", ...f, so_hien_tai: Number(f.so_hien_tai) || 1 }]);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  return (
+    <div>
+      <PageHeader title="Hóa đơn điện tử" subtitle="Cấu hình đánh số hóa đơn theo đúng quy cách pháp lý (mẫu số, ký hiệu, số hóa đơn tuần tự)" />
+
+      <div className="mb-4 px-3 py-2.5 rounded-md text-[12.5px] flex items-start gap-2" style={{ background: COLORS.amberBg, color: "#5C4109" }}>
+        <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <span>
+          Mục này chỉ giúp <b>đánh số hóa đơn đúng chuẩn</b> (mẫu số, ký hiệu, số tuần tự) để in ra chứng từ hợp lệ về mặt hình thức.
+          Đây <b>không phải</b> kết nối thật với Viettel/MISA/VNPT để phát hành hóa đơn điện tử hợp pháp và nộp cho cơ quan thuế — việc đó cần bạn đăng ký tài khoản merchant với 1 trong 3 nhà cung cấp và cung cấp API key cho mình để nối tiếp.
+        </span>
+      </div>
+
+      <div className="rounded-lg p-4 max-w-xl" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+        <form onSubmit={submit}>
+          <Field label="Nhà cung cấp hóa đơn điện tử dự kiến">
+            <select className={inputCls} style={inputStyle} value={f.nha_cung_cap} onChange={(e) => setF({ ...f, nha_cung_cap: e.target.value })}>
+              {EINVOICE_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </Field>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
+            <Field label="Mẫu số" required><input required className={inputCls} style={inputStyle} value={f.mau_so} onChange={(e) => setF({ ...f, mau_so: e.target.value })} placeholder="VD: 1" /></Field>
+            <Field label="Ký hiệu" required><input required className={inputCls} style={inputStyle} value={f.ky_hieu} onChange={(e) => setF({ ...f, ky_hieu: e.target.value.toUpperCase() })} placeholder="VD: 1C25TAA" /></Field>
+          </div>
+          <Field label="Số hóa đơn tiếp theo sẽ dùng">
+            <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 160 }} value={f.so_hien_tai} onChange={(e) => setF({ ...f, so_hien_tai: e.target.value })} />
+          </Field>
+          <div className="mt-2 mb-3 text-[12.5px]" style={{ color: COLORS.textMuted }}>
+            Xem trước: <b style={{ color: COLORS.text }}>Mẫu số {f.mau_so || "?"} — Ký hiệu {f.ky_hieu || "?"} — Số {String(f.so_hien_tai || 1).padStart(7, "0")}</b>
+          </div>
+          <div className="flex items-center gap-2 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+            <Btn type="submit">Lưu cấu hình</Btn>
+            {saved && <span className="text-[12.5px]" style={{ color: COLORS.green }}>Đã lưu.</span>}
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Invoices: Bán hàng / Mua hàng                                       */
 /* ------------------------------------------------------------------ */
-function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, channels, soStore }) {
+function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, channels, soStore, warehouses, einvoiceStore }) {
   // mode: 'sale' | 'purchase'
   const isSale = mode === "sale";
   const { items: invoices, add: addInv, remove: removeInv } = invStore;
@@ -1099,6 +1269,18 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
   const partnerName = (id) => partners.find((p) => p.id === id)?.ten || "—";
   const channelName = (id) => (channels || []).find((c) => c.id === id)?.ten;
 
+  function openPrint(inv) {
+    const config = einvoiceStore?.items?.[0];
+    if (isSale && config && !inv.so_hddt) {
+      const soHddt = String(config.so_hien_tai).padStart(7, "0");
+      invStore.update(inv.id, { so_hddt: soHddt, mau_so_hddt: config.mau_so, ky_hieu_hddt: config.ky_hieu });
+      einvoiceStore.persist([{ ...config, so_hien_tai: (Number(config.so_hien_tai) || 1) + 1 }]);
+      setPrinting({ ...inv, so_hddt: soHddt, mau_so_hddt: config.mau_so, ky_hieu_hddt: config.ky_hieu });
+    } else {
+      setPrinting(inv);
+    }
+  }
+
   const filtered = invoices
     .filter((inv) => !query || inv.ma?.toLowerCase().includes(query.toLowerCase()) || partnerName(inv.doi_tac_id).toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => (b.ngay || "").localeCompare(a.ngay || ""));
@@ -1111,7 +1293,7 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
       const next = cur.map((p) => {
         const line = form.items.find((it) => it.hang_hoa_id === p.id);
         if (!line) return p;
-        return { ...p, ton_kho: (p.ton_kho || 0) + delta * line.so_luong };
+        return adjustProductStock(p, delta * line.so_luong, form.kho_id);
       });
       storageSet(STORE_KEYS.products, next);
       return next;
@@ -1130,7 +1312,7 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
       const next = cur.map((p) => {
         const line = inv.items.find((it) => it.hang_hoa_id === p.id);
         if (!line) return p;
-        return { ...p, ton_kho: (p.ton_kho || 0) + delta * line.so_luong };
+        return adjustProductStock(p, delta * line.so_luong, inv.kho_id);
       });
       storageSet(STORE_KEYS.products, next);
       return next;
@@ -1175,7 +1357,7 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
         />
       )}
       {creating && (
-        <InvoiceForm mode={mode} partners={partners} products={products} priceLists={priceLists} channels={channels} onCancel={() => setCreating(false)} onSave={createInvoice} />
+        <InvoiceForm mode={mode} partners={partners} products={products} priceLists={priceLists} channels={channels} warehouses={warehouses} onCancel={() => setCreating(false)} onSave={createInvoice} />
       )}
       {viewing && (
         <Modal title={`Chi tiết ${viewing.ma}`} onClose={() => setViewing(null)} width="max-w-2xl">
@@ -1184,7 +1366,7 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
               {isSale ? "Khách hàng" : "Nhà cung cấp"}: <span style={{ color: COLORS.text }}>{partnerName(viewing.doi_tac_id)}</span> · Ngày: {fmtDate(viewing.ngay)}
               {viewing.kenh_id && <> · Kênh: <span style={{ color: COLORS.text }}>{channelName(viewing.kenh_id)}</span></>}
             </div>
-            <PrintButton onClick={() => setPrinting(viewing)} />
+            <PrintButton onClick={() => openPrint(viewing)} />
           </div>
           <Table
             columns={[
@@ -1221,6 +1403,9 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
             partnerName: partnerName(printing.doi_tac_id),
             items: printing.items,
             total: printing.tong_tien,
+            soHddt: printing.so_hddt,
+            mauSoHddt: printing.mau_so_hddt,
+            kyHieuHddt: printing.ky_hieu_hddt,
           }}
         />
       )}
@@ -1228,10 +1413,11 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
   );
 }
 
-function InvoiceForm({ mode, partners, products, priceLists, channels, onCancel, onSave, initialDoc }) {
+function InvoiceForm({ mode, partners, products, priceLists, channels, warehouses, onCancel, onSave, initialDoc }) {
   const isSale = mode === "sale";
   const [doiTacId, setDoiTacId] = useState(initialDoc?.doi_tac_id || partners[0]?.id || "");
   const [kenhId, setKenhId] = useState(initialDoc?.kenh_id || "");
+  const [khoId, setKhoId] = useState(initialDoc?.kho_id || warehouses?.[0]?.id || "");
   const [ngay, setNgay] = useState(todayStr());
   const [lines, setLines] = useState(initialDoc?.items?.length ? initialDoc.items.map((l) => ({ ...l })) : [{ hang_hoa_id: "", so_luong: 1, don_gia: 0 }]);
   const [daThanhToan, setDaThanhToan] = useState(0);
@@ -1243,6 +1429,13 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, onCancel,
   const subtotal = lines.reduce((s, l) => s + (Number(l.so_luong) || 0) * (Number(l.don_gia) || 0), 0);
   const discountAmount = isSale ? subtotal * (chietKhauPct / 100) : 0;
   const total = subtotal - discountAmount;
+  const hasOversell = isSale && lines.some((l) => {
+    const product = products.find((p) => p.id === l.hang_hoa_id);
+    if (!product) return false;
+    const tyLe = unitsFor(l.hang_hoa_id)[l.don_vi_idx || 0]?.ty_le || 1;
+    const available = khoId && product.ton_kho_theo_kho ? (product.ton_kho_theo_kho[khoId] || 0) : (product.ton_kho || 0);
+    return (Number(l.so_luong) || 0) * tyLe > available;
+  });
 
   function priceFor(productId) {
     const prod = products.find((p) => p.id === productId);
@@ -1298,6 +1491,7 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, onCancel,
       ngay,
       doi_tac_id: doiTacId,
       kenh_id: isSale ? kenhId : undefined,
+      kho_id: khoId || undefined,
       items: withNames,
       tam_tinh: subtotal,
       chiet_khau_pct: isSale ? chietKhauPct : 0,
@@ -1326,6 +1520,11 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, onCancel,
             {chietKhauPct > 0 && <span>{priceList ? " · " : ""}Chiết khấu khách hàng: <b>{chietKhauPct}%</b></span>}
           </div>
         )}
+        {hasOversell && (
+          <div className="mb-3 px-3 py-2 rounded-md text-[12.5px] flex items-center gap-2" style={{ background: COLORS.redBg, color: COLORS.red }}>
+            <AlertTriangle size={13} /> Có hàng hóa đang bán vượt tồn kho hiện có — tồn kho sẽ về số âm nếu vẫn lưu chứng từ này.
+          </div>
+        )}
         {isSale && channels?.length > 0 && (
           <Field label="Kênh bán hàng">
             <select className={inputCls} style={inputStyle} value={kenhId} onChange={(e) => setKenhId(e.target.value)}>
@@ -1334,30 +1533,49 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, onCancel,
             </select>
           </Field>
         )}
+        {warehouses?.length > 1 && (
+          <Field label="Kho / Chi nhánh" required>
+            <select required className={inputCls} style={inputStyle} value={khoId} onChange={(e) => setKhoId(e.target.value)}>
+              {warehouses.map((w) => <option key={w.id} value={w.id}>{w.ten}</option>)}
+            </select>
+          </Field>
+        )}
 
         <div className="mt-1 mb-2 text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>Chi tiết hàng hóa</div>
         <div className="rounded-md border overflow-x-auto" style={{ borderColor: COLORS.border }}>
           {lines.map((l, idx) => {
             const lineUnits = unitsFor(l.hang_hoa_id);
+            const product = products.find((p) => p.id === l.hang_hoa_id);
+            const tyLe = lineUnits[l.don_vi_idx || 0]?.ty_le || 1;
+            const baseQty = (Number(l.so_luong) || 0) * tyLe;
+            const availableQty = product ? (khoId && product.ton_kho_theo_kho ? (product.ton_kho_theo_kho[khoId] || 0) : (product.ton_kho || 0)) : 0;
+            const overselling = isSale && product && baseQty > availableQty;
             return (
-              <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0 min-w-[680px]" style={{ borderColor: COLORS.border }}>
-                <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
-                  <option value="">-- Chọn hàng hóa --</option>
-                  {products.map((p) => <option key={p.id} value={p.id}>{p.ten} ({p.ton_kho ?? 0} {p.dvt})</option>)}
-                </select>
-                <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 65 }} value={l.so_luong} onChange={(e) => setLine(idx, { so_luong: +e.target.value })} />
-                {lineUnits.length > 1 ? (
-                  <select className={inputCls} style={{ ...inputStyle, width: 95 }} value={l.don_vi_idx || 0} onChange={(e) => setLine(idx, { don_vi_idx: +e.target.value })}>
-                    {lineUnits.map((u, i) => <option key={i} value={i}>{u.ten}</option>)}
+              <div key={idx} className="px-2.5 py-2 border-b last:border-b-0 min-w-[680px]" style={{ borderColor: COLORS.border }}>
+                <div className="flex items-center gap-2">
+                  <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
+                    <option value="">-- Chọn hàng hóa --</option>
+                    {products.map((p) => <option key={p.id} value={p.id}>{p.ten} ({p.ton_kho ?? 0} {p.dvt})</option>)}
                   </select>
-                ) : (
-                  <span className="text-[12px] w-16 shrink-0" style={{ color: COLORS.textMuted }}>{lineUnits[0]?.ten}</span>
+                  <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 65, ...(overselling ? { borderColor: COLORS.red } : {}) }} value={l.so_luong} onChange={(e) => setLine(idx, { so_luong: +e.target.value })} />
+                  {lineUnits.length > 1 ? (
+                    <select className={inputCls} style={{ ...inputStyle, width: 95 }} value={l.don_vi_idx || 0} onChange={(e) => setLine(idx, { don_vi_idx: +e.target.value })}>
+                      {lineUnits.map((u, i) => <option key={i} value={i}>{u.ten}</option>)}
+                    </select>
+                  ) : (
+                    <span className="text-[12px] w-16 shrink-0" style={{ color: COLORS.textMuted }}>{lineUnits[0]?.ten}</span>
+                  )}
+                  <input type="number" min="0" className={inputCls} style={{ ...inputStyle, width: 110 }} value={l.don_gia} onChange={(e) => setLine(idx, { don_gia: +e.target.value })} />
+                  <div className="w-28 text-right text-[13px]" style={{ color: COLORS.text }}>{fmtVND((l.so_luong || 0) * (l.don_gia || 0))}</div>
+                  <button type="button" onClick={() => removeLine(idx)} className="p-1 rounded hover:bg-slate-100">
+                    <X size={14} color={COLORS.textMuted} />
+                  </button>
+                </div>
+                {overselling && (
+                  <div className="mt-1 text-[11.5px] flex items-center gap-1" style={{ color: COLORS.red }}>
+                    <AlertTriangle size={12} /> Vượt tồn kho — chỉ còn {availableQty} {product.dvt}, đang bán {baseQty} {product.dvt}
+                  </div>
                 )}
-                <input type="number" min="0" className={inputCls} style={{ ...inputStyle, width: 110 }} value={l.don_gia} onChange={(e) => setLine(idx, { don_gia: +e.target.value })} />
-                <div className="w-28 text-right text-[13px]" style={{ color: COLORS.text }}>{fmtVND((l.so_luong || 0) * (l.don_gia || 0))}</div>
-                <button type="button" onClick={() => removeLine(idx)} className="p-1 rounded hover:bg-slate-100">
-                  <X size={14} color={COLORS.textMuted} />
-                </button>
               </div>
             );
           })}
@@ -1399,7 +1617,7 @@ const SO_STATUS = {
   cancelled: { label: "Đã hủy", tone: "red" },
 };
 
-function SalesOrdersPage({ store, salesStore, productStore, partnerStore, priceLists, channels }) {
+function SalesOrdersPage({ store, salesStore, productStore, partnerStore, priceLists, channels, warehouses }) {
   const { items: orders, add, update, remove } = store;
   const { items: partners } = partnerStore;
   const { items: products, setItems: setProducts } = productStore;
@@ -1425,7 +1643,7 @@ function SalesOrdersPage({ store, salesStore, productStore, partnerStore, priceL
       const next = cur.map((p) => {
         const line = invoiceForm.items.find((it) => it.hang_hoa_id === p.id);
         if (!line) return p;
-        return { ...p, ton_kho: (p.ton_kho || 0) - line.so_luong };
+        return adjustProductStock(p, -line.so_luong, invoiceForm.kho_id);
       });
       storageSet(STORE_KEYS.products, next);
       return next;
@@ -1474,6 +1692,7 @@ function SalesOrdersPage({ store, salesStore, productStore, partnerStore, priceL
           products={products}
           priceLists={priceLists}
           channels={channels}
+          warehouses={warehouses}
           initialDoc={converting}
           onCancel={() => setConverting(null)}
           onSave={(invForm) => convertToInvoice(converting, invForm)}
@@ -1606,11 +1825,12 @@ function SalesOrderForm({ partners, products, priceLists, channels, onSave, onCa
 /* ------------------------------------------------------------------ */
 /* Bán hàng nhanh (POS)                                                */
 /* ------------------------------------------------------------------ */
-function POSPage({ products, customers, priceLists, channels, salesStore, productStore }) {
+function POSPage({ products, customers, priceLists, channels, warehouses, salesStore, productStore }) {
   const { add: addSale } = salesStore;
   const { setItems: setProducts } = productStore;
   const [cart, setCart] = useState([]); // [{ hang_hoa_id, ten, so_luong, don_gia, dvt }]
   const [customerId, setCustomerId] = useState("");
+  const [khoId, setKhoId] = useState(warehouses?.[0]?.id || "");
   const [search, setSearch] = useState("");
   const [scannerOpen, setScannerOpen] = useState(false);
   const [tienKhachDua, setTienKhachDua] = useState("");
@@ -1685,6 +1905,7 @@ function POSPage({ products, customers, priceLists, channels, salesStore, produc
       ma: uid("HD").toUpperCase(),
       ngay: todayStr(),
       doi_tac_id: customerId || undefined,
+      kho_id: khoId || undefined,
       items,
       tam_tinh: subtotal,
       chiet_khau_pct: chietKhauPct,
@@ -1696,7 +1917,7 @@ function POSPage({ products, customers, priceLists, channels, salesStore, produc
       const next = cur.map((p) => {
         const line = items.find((it) => it.hang_hoa_id === p.id);
         if (!line) return p;
-        return { ...p, ton_kho: (p.ton_kho || 0) - line.so_luong };
+        return adjustProductStock(p, -line.so_luong, khoId);
       });
       storageSet(STORE_KEYS.products, next);
       return next;
@@ -1760,6 +1981,13 @@ function POSPage({ products, customers, priceLists, channels, salesStore, produc
               {customers.map((c) => <option key={c.id} value={c.id}>{c.ten}</option>)}
             </select>
           </Field>
+          {warehouses?.length > 1 && (
+            <Field label="Bán từ kho">
+              <select className={inputCls} style={inputStyle} value={khoId} onChange={(e) => setKhoId(e.target.value)}>
+                {warehouses.map((w) => <option key={w.id} value={w.id}>{w.ten}</option>)}
+              </select>
+            </Field>
+          )}
           {(priceList || chietKhauPct > 0) && (
             <div className="mb-2 px-2 py-1.5 rounded text-[11.5px]" style={{ background: COLORS.goldBg, color: "#5C4109" }}>
               {priceList && <div>Bảng giá: <b>{priceList.ten}</b></div>}
@@ -1771,18 +1999,27 @@ function POSPage({ products, customers, priceLists, channels, salesStore, produc
             {cart.length === 0 ? (
               <div className="text-[12.5px] text-center py-8" style={{ color: COLORS.textMuted }}>Giỏ hàng trống</div>
             ) : (
-              cart.map((l) => (
-                <div key={l.hang_hoa_id} className="flex items-center gap-2 text-[12.5px]">
-                  <div className="flex-1 min-w-0">
-                    <div className="truncate" style={{ color: COLORS.text }}>{l.ten}</div>
-                    <div style={{ color: COLORS.textMuted }}>{fmtVND(l.don_gia)} / {l.dvt}</div>
+              cart.map((l) => {
+                const product = products.find((p) => p.id === l.hang_hoa_id);
+                const overselling = product && l.so_luong > (khoId && product.ton_kho_theo_kho ? (product.ton_kho_theo_kho[khoId] || 0) : (product.ton_kho || 0));
+                return (
+                  <div key={l.hang_hoa_id}>
+                    <div className="flex items-center gap-2 text-[12.5px]">
+                      <div className="flex-1 min-w-0">
+                        <div className="truncate" style={{ color: COLORS.text }}>{l.ten}</div>
+                        <div style={{ color: COLORS.textMuted }}>{fmtVND(l.don_gia)} / {l.dvt}</div>
+                      </div>
+                      <button type="button" onClick={() => setQty(l.hang_hoa_id, l.so_luong - 1)} className="w-6 h-6 rounded shrink-0" style={{ border: `1px solid ${COLORS.border}` }}>−</button>
+                      <span className="w-6 text-center shrink-0" style={overselling ? { color: COLORS.red, fontWeight: 600 } : {}}>{l.so_luong}</span>
+                      <button type="button" onClick={() => setQty(l.hang_hoa_id, l.so_luong + 1)} className="w-6 h-6 rounded shrink-0" style={{ border: `1px solid ${COLORS.border}` }}>+</button>
+                      <button type="button" onClick={() => removeLine(l.hang_hoa_id)} className="shrink-0"><X size={14} color={COLORS.red} /></button>
+                    </div>
+                    {overselling && (
+                      <div className="text-[11px] mt-0.5" style={{ color: COLORS.red }}>Vượt tồn kho (còn {product.ton_kho ?? 0})</div>
+                    )}
                   </div>
-                  <button type="button" onClick={() => setQty(l.hang_hoa_id, l.so_luong - 1)} className="w-6 h-6 rounded shrink-0" style={{ border: `1px solid ${COLORS.border}` }}>−</button>
-                  <span className="w-6 text-center shrink-0">{l.so_luong}</span>
-                  <button type="button" onClick={() => setQty(l.hang_hoa_id, l.so_luong + 1)} className="w-6 h-6 rounded shrink-0" style={{ border: `1px solid ${COLORS.border}` }}>+</button>
-                  <button type="button" onClick={() => removeLine(l.hang_hoa_id)} className="shrink-0"><X size={14} color={COLORS.red} /></button>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
 
@@ -1829,7 +2066,7 @@ function POSPage({ products, customers, priceLists, channels, salesStore, produc
 /* ------------------------------------------------------------------ */
 /* Stock vouchers: Nhập kho / Xuất kho (manual adjustments)             */
 /* ------------------------------------------------------------------ */
-function StockVoucherPage({ type, store, productStore }) {
+function StockVoucherPage({ type, store, productStore, warehouses }) {
   // type: 'in' | 'out'
   const isIn = type === "in";
   const { items, add, remove } = store;
@@ -1845,7 +2082,7 @@ function StockVoucherPage({ type, store, productStore }) {
     setProducts((cur) => {
       const next = cur.map((p) => {
         if (p.id !== form.hang_hoa_id) return p;
-        return { ...p, ton_kho: (p.ton_kho || 0) + delta * form.so_luong };
+        return adjustProductStock(p, delta * form.so_luong, form.kho_id);
       });
       storageSet(STORE_KEYS.products, next);
       return next;
@@ -1856,7 +2093,7 @@ function StockVoucherPage({ type, store, productStore }) {
   function del(v) {
     const delta = isIn ? -1 : 1;
     setProducts((cur) => {
-      const next = cur.map((p) => (p.id === v.hang_hoa_id ? { ...p, ton_kho: (p.ton_kho || 0) + delta * v.so_luong } : p));
+      const next = cur.map((p) => (p.id === v.hang_hoa_id ? adjustProductStock(p, delta * v.so_luong, v.kho_id) : p));
       storageSet(STORE_KEYS.products, next);
       return next;
     });
@@ -1887,7 +2124,7 @@ function StockVoucherPage({ type, store, productStore }) {
           onDelete={setToDelete}
         />
       )}
-      {creating && <StockVoucherForm isIn={isIn} products={products} onCancel={() => setCreating(false)} onSave={create} />}
+      {creating && <StockVoucherForm isIn={isIn} products={products} warehouses={warehouses} onCancel={() => setCreating(false)} onSave={create} />}
       {toDelete && <ConfirmBar text={`Xóa phiếu "${toDelete.ma}"? Tồn kho sẽ được hoàn lại.`} onConfirm={() => del(toDelete)} onCancel={() => setToDelete(null)} />}
       {printing && (
         <PrintDocument
@@ -1907,12 +2144,13 @@ function StockVoucherPage({ type, store, productStore }) {
   );
 }
 
-function StockVoucherForm({ isIn, products, onSave, onCancel }) {
+function StockVoucherForm({ isIn, products, warehouses, onSave, onCancel }) {
   const [hangHoaId, setHangHoaId] = useState("");
   const [enteredQty, setEnteredQty] = useState(1);
   const [unitIdx, setUnitIdx] = useState(0);
   const [ngay, setNgay] = useState(todayStr());
   const [lyDo, setLyDo] = useState("");
+  const [khoId, setKhoId] = useState(warehouses?.[0]?.id || "");
 
   const product = products.find((p) => p.id === hangHoaId);
   const units = [{ ten: product?.dvt || "Cái", ty_le: 1 }, ...((product?.don_vi_quy_doi) || [])];
@@ -1926,6 +2164,7 @@ function StockVoucherForm({ isIn, products, onSave, onCancel }) {
       so_luong: baseQty,
       ngay,
       ly_do: lyDo,
+      kho_id: khoId || undefined,
       ma: uid(isIn ? "PNK" : "PXK").toUpperCase(),
       ten_hang: product?.ten,
     });
@@ -1939,6 +2178,13 @@ function StockVoucherForm({ isIn, products, onSave, onCancel }) {
             {products.map((p) => <option key={p.id} value={p.id}>{p.ten} (tồn: {p.ton_kho ?? 0} {p.dvt})</option>)}
           </select>
         </Field>
+        {warehouses?.length > 1 && (
+          <Field label="Kho / Chi nhánh" required>
+            <select required className={inputCls} style={inputStyle} value={khoId} onChange={(e) => setKhoId(e.target.value)}>
+              {warehouses.map((w) => <option key={w.id} value={w.id}>{w.ten}</option>)}
+            </select>
+          </Field>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
           <Field label="Số lượng" required>
             <div className="flex items-center gap-1.5">
@@ -1956,6 +2202,134 @@ function StockVoucherForm({ isIn, products, onSave, onCancel }) {
           <Field label="Ngày"><input type="date" className={inputCls} style={inputStyle} value={ngay} onChange={(e) => setNgay(e.target.value)} /></Field>
         </div>
         <Field label="Lý do"><input className={inputCls} style={inputStyle} value={lyDo} onChange={(e) => setLyDo(e.target.value)} placeholder={isIn ? "VD: nhập điều chỉnh, chuyển kho..." : "VD: hao hụt, hỏng, chuyển kho..."} /></Field>
+        <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+          <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
+          <Btn type="submit">Lưu phiếu</Btn>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Chuyển kho                                                          */
+/* ------------------------------------------------------------------ */
+function StockTransferPage({ store, productStore, warehouses }) {
+  const { items, add, remove } = store;
+  const { items: products, setItems: setProducts } = productStore;
+  const [creating, setCreating] = useState(false);
+  const [toDelete, setToDelete] = useState(null);
+  const list = items.filter((v) => v.loai === "transfer").sort((a, b) => (b.ngay || "").localeCompare(a.ngay || ""));
+  const whName = (id) => warehouses.find((w) => w.id === id)?.ten || "—";
+
+  function create(form) {
+    add({ ...form, id: uid("CK"), loai: "transfer" });
+    setProducts((cur) => {
+      const next = cur.map((p) => {
+        if (p.id !== form.hang_hoa_id) return p;
+        let np = adjustProductStock(p, -form.so_luong, form.tu_kho_id);
+        np = adjustProductStock(np, form.so_luong, form.den_kho_id);
+        return np;
+      });
+      storageSet(STORE_KEYS.products, next);
+      return next;
+    });
+    setCreating(false);
+  }
+
+  function del(v) {
+    setProducts((cur) => {
+      const next = cur.map((p) => {
+        if (p.id !== v.hang_hoa_id) return p;
+        let np = adjustProductStock(p, v.so_luong, v.tu_kho_id);
+        np = adjustProductStock(np, -v.so_luong, v.den_kho_id);
+        return np;
+      });
+      storageSet(STORE_KEYS.products, next);
+      return next;
+    });
+    remove(v.id);
+    setToDelete(null);
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Chuyển kho"
+        subtitle="Chuyển hàng hóa giữa các kho/chi nhánh — không làm thay đổi tổng tồn kho"
+        action={<Btn onClick={() => setCreating(true)}><Plus size={15} /> Tạo phiếu chuyển kho</Btn>}
+      />
+      {warehouses.length < 2 ? (
+        <EmptyState icon={Truck} title="Cần ít nhất 2 kho để chuyển hàng" hint="Vào mục Kho / Chi nhánh để thêm kho thứ 2 trước." />
+      ) : list.length === 0 ? (
+        <EmptyState icon={Truck} title="Chưa có phiếu chuyển kho" hint="Tạo phiếu khi cần chuyển hàng giữa các kho/chi nhánh." action={<Btn onClick={() => setCreating(true)}><Plus size={15} /> Tạo phiếu chuyển kho</Btn>} />
+      ) : (
+        <Table
+          columns={[
+            { key: "ma", label: "Số phiếu" },
+            { key: "ngay", label: "Ngày", render: (r) => fmtDate(r.ngay) },
+            { key: "ten_hang", label: "Hàng hóa" },
+            { key: "so_luong", label: "Số lượng", align: "right" },
+            { key: "tu_kho_id", label: "Từ kho", render: (r) => whName(r.tu_kho_id) },
+            { key: "den_kho_id", label: "Đến kho", render: (r) => whName(r.den_kho_id) },
+          ]}
+          rows={list}
+          onDelete={setToDelete}
+        />
+      )}
+      {creating && <StockTransferForm products={products} warehouses={warehouses} onCancel={() => setCreating(false)} onSave={create} />}
+      {toDelete && <ConfirmBar text={`Xóa phiếu "${toDelete.ma}"? Tồn kho sẽ được hoàn lại đúng kho ban đầu.`} onConfirm={() => del(toDelete)} onCancel={() => setToDelete(null)} />}
+    </div>
+  );
+}
+
+function StockTransferForm({ products, warehouses, onSave, onCancel }) {
+  const [hangHoaId, setHangHoaId] = useState("");
+  const [soLuong, setSoLuong] = useState(1);
+  const [tuKhoId, setTuKhoId] = useState(warehouses[0]?.id || "");
+  const [denKhoId, setDenKhoId] = useState(warehouses[1]?.id || "");
+  const [ngay, setNgay] = useState(todayStr());
+  const [error, setError] = useState("");
+
+  const product = products.find((p) => p.id === hangHoaId);
+  const availableAtSource = product ? (product.ton_kho_theo_kho?.[tuKhoId] || 0) : 0;
+
+  function submit(e) {
+    e.preventDefault();
+    if (!hangHoaId || !tuKhoId || !denKhoId) return;
+    if (tuKhoId === denKhoId) { setError("Kho nguồn và kho đích phải khác nhau."); return; }
+    if (soLuong > availableAtSource) { setError(`Kho nguồn chỉ còn ${availableAtSource} ${product?.dvt} — không đủ để chuyển.`); return; }
+    setError("");
+    onSave({ ma: uid("CK").toUpperCase(), ngay, hang_hoa_id: hangHoaId, so_luong: soLuong, tu_kho_id: tuKhoId, den_kho_id: denKhoId, ten_hang: product?.ten });
+  }
+
+  return (
+    <Modal title="Tạo phiếu chuyển kho" onClose={onCancel}>
+      <form onSubmit={submit}>
+        <Field label="Hàng hóa" required>
+          <select required className={inputCls} style={inputStyle} value={hangHoaId} onChange={(e) => setHangHoaId(e.target.value)}>
+            <option value="">-- Chọn hàng hóa --</option>
+            {products.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
+          </select>
+        </Field>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
+          <Field label="Từ kho" required>
+            <select required className={inputCls} style={inputStyle} value={tuKhoId} onChange={(e) => setTuKhoId(e.target.value)}>
+              {warehouses.map((w) => <option key={w.id} value={w.id}>{w.ten}</option>)}
+            </select>
+            {product && <div className="text-[11.5px] mt-1" style={{ color: COLORS.textMuted }}>Tồn tại kho này: {availableAtSource} {product.dvt}</div>}
+          </Field>
+          <Field label="Đến kho" required>
+            <select required className={inputCls} style={inputStyle} value={denKhoId} onChange={(e) => setDenKhoId(e.target.value)}>
+              {warehouses.map((w) => <option key={w.id} value={w.id}>{w.ten}</option>)}
+            </select>
+          </Field>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
+          <Field label="Số lượng" required><input required type="number" min="1" className={inputCls} style={inputStyle} value={soLuong} onChange={(e) => setSoLuong(+e.target.value)} /></Field>
+          <Field label="Ngày"><input type="date" className={inputCls} style={inputStyle} value={ngay} onChange={(e) => setNgay(e.target.value)} /></Field>
+        </div>
+        {error && <div className="mb-3 text-[12.5px]" style={{ color: COLORS.red }}>{error}</div>}
         <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
           <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
           <Btn type="submit">Lưu phiếu</Btn>
@@ -2324,26 +2698,47 @@ function DebtPage({ customers, suppliers, sales, purchases, receipts, payments, 
 /* ------------------------------------------------------------------ */
 /* Tồn kho                                                             */
 /* ------------------------------------------------------------------ */
-function StockPage({ products }) {
+function StockPage({ products, warehouses }) {
   const [query, setQuery] = useState("");
+  const [khoId, setKhoId] = useState("all");
   const filtered = products.filter((p) => !query || p.ten?.toLowerCase().includes(query.toLowerCase()));
-  const totalValue = products.reduce((s, p) => s + (p.ton_kho || 0) * (p.gia_von || 0), 0);
-  const lowStock = products.filter((p) => (p.ton_kho || 0) <= (p.ton_toi_thieu || 0));
+
+  function stockOf(p) {
+    if (khoId === "all") return p.ton_kho || 0;
+    return p.ton_kho_theo_kho?.[khoId] || 0;
+  }
+
+  const totalValue = filtered.reduce((s, p) => s + stockOf(p) * (p.gia_von || 0), 0);
+  const lowStock = filtered.filter((p) => stockOf(p) <= (p.ton_toi_thieu || 0));
 
   function doExport() {
     exportExcel("ton-kho", [{
       name: "Tồn kho",
-      rows: products.map((p) => ({
+      rows: filtered.map((p) => ({
         "Mã hàng": p.ma, "Tên hàng": p.ten, "ĐVT": p.dvt,
-        "Tồn kho": p.ton_kho ?? 0, "Tồn tối thiểu": p.ton_toi_thieu ?? 0,
-        "Giá vốn": p.gia_von || 0, "Giá trị tồn": (p.ton_kho || 0) * (p.gia_von || 0),
+        "Tồn kho": stockOf(p), "Tồn tối thiểu": p.ton_toi_thieu ?? 0,
+        "Giá vốn": p.gia_von || 0, "Giá trị tồn": stockOf(p) * (p.gia_von || 0),
       })),
     }]);
   }
 
   return (
     <div>
-      <PageHeader title="Tồn kho" subtitle="Số lượng và giá trị tồn kho hiện tại" action={<ExcelButton onClick={doExport} />} />
+      <PageHeader
+        title="Tồn kho"
+        subtitle="Số lượng và giá trị tồn kho hiện tại"
+        action={
+          <div className="flex items-center gap-2">
+            {warehouses?.length > 1 && (
+              <select className={inputCls} style={{ ...inputStyle, minWidth: 150 }} value={khoId} onChange={(e) => setKhoId(e.target.value)}>
+                <option value="all">Tất cả các kho</option>
+                {warehouses.map((w) => <option key={w.id} value={w.id}>{w.ten}</option>)}
+              </select>
+            )}
+            <ExcelButton onClick={doExport} />
+          </div>
+        }
+      />
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
         <StatCard icon={Boxes} label="Tổng mặt hàng" value={products.length} tone="navy" />
         <StatCard icon={CircleDollarSign} label="Giá trị tồn kho (theo giá vốn)" value={fmtVND(totalValue)} tone="navy" />
@@ -2359,11 +2754,11 @@ function StockPage({ products }) {
             { key: "ten", label: "Tên hàng" },
             { key: "dvt", label: "ĐVT" },
             { key: "ton_kho", label: "Tồn kho", align: "right", render: (r) => (
-              <span style={{ color: r.ton_kho <= (r.ton_toi_thieu || 0) ? COLORS.red : COLORS.text, fontWeight: r.ton_kho <= (r.ton_toi_thieu || 0) ? 600 : 400 }}>{r.ton_kho ?? 0}</span>
+              <span style={{ color: stockOf(r) <= (r.ton_toi_thieu || 0) ? COLORS.red : COLORS.text, fontWeight: stockOf(r) <= (r.ton_toi_thieu || 0) ? 600 : 400 }}>{stockOf(r)}</span>
             ) },
             { key: "ton_toi_thieu", label: "Tồn tối thiểu", align: "right" },
-            { key: "gia_tri", label: "Giá trị tồn", align: "right", render: (r) => fmtVND((r.ton_kho || 0) * (r.gia_von || 0)) },
-            { key: "trang_thai", label: "Trạng thái", render: (r) => (r.ton_kho <= (r.ton_toi_thieu || 0) ? <Badge tone="red">Sắp hết</Badge> : <Badge tone="green">Bình thường</Badge>) },
+            { key: "gia_tri", label: "Giá trị tồn", align: "right", render: (r) => fmtVND(stockOf(r) * (r.gia_von || 0)) },
+            { key: "trang_thai", label: "Trạng thái", render: (r) => (stockOf(r) <= (r.ton_toi_thieu || 0) ? <Badge tone="red">Sắp hết</Badge> : <Badge tone="green">Bình thường</Badge>) },
           ]}
           rows={filtered}
         />
@@ -2966,7 +3361,7 @@ function ReportsPage({ sales, purchases, products, channels }) {
 /* ------------------------------------------------------------------ */
 /* Trả hàng bán / Trả hàng mua                                         */
 /* ------------------------------------------------------------------ */
-function ReturnPage({ mode, retStore, invStore, partnerStore, productStore }) {
+function ReturnPage({ mode, retStore, invStore, partnerStore, productStore, warehouses }) {
   // mode: 'sale' (trả hàng bán, khách trả lại) | 'purchase' (trả hàng mua, trả lại NCC)
   const isSaleReturn = mode === "sale";
   const { items: returns, add: addRet, remove: removeRet } = retStore;
@@ -2987,7 +3382,7 @@ function ReturnPage({ mode, retStore, invStore, partnerStore, productStore }) {
       const next = cur.map((p) => {
         const line = form.items.find((it) => it.hang_hoa_id === p.id);
         if (!line) return p;
-        return { ...p, ton_kho: (p.ton_kho || 0) + delta * line.so_luong };
+        return adjustProductStock(p, delta * line.so_luong, form.kho_id);
       });
       storageSet(STORE_KEYS.products, next);
       return next;
@@ -3001,7 +3396,7 @@ function ReturnPage({ mode, retStore, invStore, partnerStore, productStore }) {
       const next = cur.map((p) => {
         const line = r.items.find((it) => it.hang_hoa_id === p.id);
         if (!line) return p;
-        return { ...p, ton_kho: (p.ton_kho || 0) + delta * line.so_luong };
+        return adjustProductStock(p, delta * line.so_luong, r.kho_id);
       });
       storageSet(STORE_KEYS.products, next);
       return next;
@@ -3034,7 +3429,7 @@ function ReturnPage({ mode, retStore, invStore, partnerStore, productStore }) {
           onDelete={setToDelete}
         />
       )}
-      {creating && <ReturnForm isSaleReturn={isSaleReturn} invoices={invoices} partners={partners} products={products} onCancel={() => setCreating(false)} onSave={create} />}
+      {creating && <ReturnForm isSaleReturn={isSaleReturn} invoices={invoices} partners={partners} products={products} warehouses={warehouses} onCancel={() => setCreating(false)} onSave={create} />}
       {toDelete && <ConfirmBar text={`Xóa phiếu "${toDelete.ma}"? Tồn kho sẽ được điều chỉnh lại.`} onConfirm={() => del(toDelete)} onCancel={() => setToDelete(null)} />}
       {printing && (
         <PrintDocument
@@ -3055,10 +3450,11 @@ function ReturnPage({ mode, retStore, invStore, partnerStore, productStore }) {
   );
 }
 
-function ReturnForm({ isSaleReturn, invoices, partners, products, onSave, onCancel }) {
+function ReturnForm({ isSaleReturn, invoices, partners, products, warehouses, onSave, onCancel }) {
   const [doiTacId, setDoiTacId] = useState("");
   const [ngay, setNgay] = useState(todayStr());
   const [lyDo, setLyDo] = useState("");
+  const [khoId, setKhoId] = useState(warehouses?.[0]?.id || "");
   const [lines, setLines] = useState([{ hang_hoa_id: "", so_luong: 1, don_gia: 0, don_vi_idx: 0 }]);
   const total = lines.reduce((s, l) => s + (Number(l.so_luong) || 0) * (Number(l.don_gia) || 0), 0);
 
@@ -3103,7 +3499,7 @@ function ReturnForm({ isSaleReturn, invoices, partners, products, onSave, onCanc
         don_gia: tyLe > 1 ? Math.round((Number(l.don_gia) || 0) / tyLe) : (Number(l.don_gia) || 0),
       };
     });
-    onSave({ ma: uid(isSaleReturn ? "THB" : "THM").toUpperCase(), ngay, doi_tac_id: doiTacId, items: withNames, tong_tien: total, ly_do: lyDo });
+    onSave({ ma: uid(isSaleReturn ? "THB" : "THM").toUpperCase(), ngay, doi_tac_id: doiTacId, kho_id: khoId || undefined, items: withNames, tong_tien: total, ly_do: lyDo });
   }
 
   return (
@@ -3118,6 +3514,13 @@ function ReturnForm({ isSaleReturn, invoices, partners, products, onSave, onCanc
           </Field>
           <Field label="Ngày chứng từ"><input type="date" className={inputCls} style={inputStyle} value={ngay} onChange={(e) => setNgay(e.target.value)} /></Field>
         </div>
+        {warehouses?.length > 1 && (
+          <Field label="Kho / Chi nhánh" required>
+            <select required className={inputCls} style={inputStyle} value={khoId} onChange={(e) => setKhoId(e.target.value)}>
+              {warehouses.map((w) => <option key={w.id} value={w.id}>{w.ten}</option>)}
+            </select>
+          </Field>
+        )}
         <div className="mt-1 mb-2 text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>Chi tiết hàng trả</div>
         <div className="rounded-md border overflow-x-auto" style={{ borderColor: COLORS.border }}>
           {lines.map((l, idx) => {
@@ -3171,7 +3574,7 @@ function PrintDocument({ doc, onClose }) {
     return () => clearTimeout(t);
   }, []);
   if (!doc) return null;
-  const { title, ma, ngay, partnerLabel, partnerName, items, total, note } = doc;
+  const { title, ma, ngay, partnerLabel, partnerName, items, total, note, soHddt, mauSoHddt, kyHieuHddt } = doc;
   return (
     <div id="ntcons-print-root">
       <style>{`
@@ -3195,6 +3598,9 @@ function PrintDocument({ doc, onClose }) {
           <div className="ml-auto text-right">
             <div className="text-[18px] font-bold uppercase">{title}</div>
             <div className="text-[12px] text-gray-500">Số: {ma} · Ngày {fmtDate(ngay)}</div>
+            {soHddt && (
+              <div className="text-[12px] text-gray-500">Mẫu số {mauSoHddt} — Ký hiệu {kyHieuHddt} — Số {soHddt}</div>
+            )}
           </div>
         </div>
         <div className="mb-4 text-[13.5px]">{partnerLabel}: <span className="font-semibold">{partnerName}</span></div>
@@ -3824,6 +4230,8 @@ export default function App() {
   const payrollStore = useCollection(STORE_KEYS.payroll);
   const channelStore = useCollection(STORE_KEYS.channels);
   const paymentMethodStore = useCollection(STORE_KEYS.paymentmethods);
+  const warehouseStore = useCollection(STORE_KEYS.warehouses);
+  const einvoiceStore = useCollection(STORE_KEYS.einvoiceconfig);
   const auditLogStore = useCollection(STORE_KEYS.auditlog);
   const auditStoreRef = useRef(null);
   auditStoreRef.current = auditLogStore;
@@ -3837,7 +4245,7 @@ export default function App() {
     paymentStore.loading || voucherStore.loading || saleReturnStore.loading ||
     purchaseReturnStore.loading || priceListStore.loading || salesOrderStore.loading ||
     employeeStore.loading || payrollStore.loading || channelStore.loading ||
-    paymentMethodStore.loading || auditLogStore.loading;
+    paymentMethodStore.loading || auditLogStore.loading || warehouseStore.loading || einvoiceStore.loading;
 
   const allowedPages = auth.currentUser ? (ROLE_PAGES[auth.currentUser.role] || null) : [];
 
@@ -3873,17 +4281,19 @@ export default function App() {
         salereturns={saleReturnStore.items}
       />
     ),
-    products: <ProductsPage store={productStore} />,
+    products: <ProductsPage store={productStore} warehouses={warehouseStore.items} />,
     customers: <PartnerPage store={customerStore} kind="customer" priceLists={priceListStore.items} />,
     suppliers: <PartnerPage store={supplierStore} kind="supplier" />,
     pricelists: <PriceListsPage store={priceListStore} products={productStore.items} />,
     channels: <ChannelsPage store={channelStore} />,
+    warehouses: <WarehousesPage store={warehouseStore} />,
     pos: (
       <POSPage
         products={productStore.items}
         customers={customerStore.items}
         priceLists={priceListStore.items}
         channels={channelStore.items}
+        warehouses={warehouseStore.items}
         salesStore={salesStore}
         productStore={productStore}
       />
@@ -3896,6 +4306,7 @@ export default function App() {
         partnerStore={customerStore}
         priceLists={priceListStore.items}
         channels={channelStore.items}
+        warehouses={warehouseStore.items}
       />
     ),
     sales: (
@@ -3906,14 +4317,17 @@ export default function App() {
         productStore={productStore}
         priceLists={priceListStore.items}
         channels={channelStore.items}
+        warehouses={warehouseStore.items}
         soStore={salesOrderStore}
+        einvoiceStore={einvoiceStore}
       />
     ),
-    salereturns: <ReturnPage mode="sale" retStore={saleReturnStore} invStore={salesStore} partnerStore={customerStore} productStore={productStore} />,
-    purchases: <InvoicePage mode="purchase" invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} />,
-    purchasereturns: <ReturnPage mode="purchase" retStore={purchaseReturnStore} invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} />,
-    stockin: <StockVoucherPage type="in" store={voucherStore} productStore={productStore} />,
-    stockout: <StockVoucherPage type="out" store={voucherStore} productStore={productStore} />,
+    salereturns: <ReturnPage mode="sale" retStore={saleReturnStore} invStore={salesStore} partnerStore={customerStore} productStore={productStore} warehouses={warehouseStore.items} />,
+    purchases: <InvoicePage mode="purchase" invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} warehouses={warehouseStore.items} />,
+    purchasereturns: <ReturnPage mode="purchase" retStore={purchaseReturnStore} invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} warehouses={warehouseStore.items} />,
+    stockin: <StockVoucherPage type="in" store={voucherStore} productStore={productStore} warehouses={warehouseStore.items} />,
+    stockout: <StockVoucherPage type="out" store={voucherStore} productStore={productStore} warehouses={warehouseStore.items} />,
+    stocktransfer: <StockTransferPage store={voucherStore} productStore={productStore} warehouses={warehouseStore.items} />,
     receipts: <CashVoucherPage type="thu" store={receiptStore} partnerStore={customerStore} paymentMethodStore={paymentMethodStore} />,
     payments: <CashVoucherPage type="chi" store={paymentStore} partnerStore={supplierStore} paymentMethodStore={paymentMethodStore} />,
     paymentmethods: <PaymentMethodsPage store={paymentMethodStore} />,
@@ -3930,7 +4344,7 @@ export default function App() {
         purchasereturns={purchaseReturnStore.items}
       />
     ),
-    stock: <StockPage products={productStore.items} />,
+    stock: <StockPage products={productStore.items} warehouses={warehouseStore.items} />,
     nxt: <NXTPage products={productStore.items} sales={salesStore.items} purchases={purchaseStore.items} salereturns={saleReturnStore.items} purchasereturns={purchaseReturnStore.items} vouchers={voucherStore.items} />,
     reports: <ReportsPage sales={salesStore.items} purchases={purchaseStore.items} products={productStore.items} channels={channelStore.items} />,
     taxreport: <TaxReportPage sales={salesStore.items} purchases={purchaseStore.items} products={productStore.items} />,
@@ -3949,6 +4363,7 @@ export default function App() {
       />
     ),
     auditlog: <AuditLogPage store={auditLogStore} />,
+    einvoice: <EInvoiceSettingsPage store={einvoiceStore} />,
   };
 
   const notifications = anyLoading ? [] : computeNotifications(salesStore.items, productStore.items);
