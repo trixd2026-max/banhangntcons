@@ -6,7 +6,8 @@ import {
   TrendingUp, TrendingDown, CircleDollarSign, PackageSearch, Undo2,
   Printer, LogOut, UserCog, ShieldCheck, Eye, EyeOff,
   Tag, ClipboardList, Contact, Banknote, Landmark, FileSpreadsheet, Store, Percent,
-  CreditCard, BookOpen, Database, Bell, Upload, History, ScanLine
+  CreditCard, BookOpen, Database, Bell, Upload, History, ScanLine,
+  Building2, CheckCircle2, ChevronLeft, ChevronsUpDown, ChevronUp, ChevronDown, Loader2
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -58,6 +59,65 @@ function monthKey(d) {
   return (d || "").slice(0, 7);
 }
 
+/* ------------------------------------------------------------------ */
+/* Đọc số tiền thành chữ (bắt buộc trên chứng từ kế toán Việt Nam)      */
+/* ------------------------------------------------------------------ */
+const DIGIT_WORDS = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"];
+
+/** Đọc một nhóm 3 chữ số. `full` = true khi đây không phải nhóm đầu tiên. */
+function readTriple(n, full) {
+  const tram = Math.floor(n / 100);
+  const chuc = Math.floor((n % 100) / 10);
+  const donvi = n % 10;
+  const parts = [];
+  if (tram > 0 || full) {
+    parts.push(DIGIT_WORDS[tram], "trăm");
+  }
+  if (chuc > 1) {
+    parts.push(DIGIT_WORDS[chuc], "mươi");
+    if (donvi === 1) parts.push("mốt");
+    else if (donvi === 5) parts.push("lăm");
+    else if (donvi > 0) parts.push(DIGIT_WORDS[donvi]);
+  } else if (chuc === 1) {
+    parts.push("mười");
+    if (donvi === 1) parts.push("một");
+    else if (donvi === 5) parts.push("lăm");
+    else if (donvi > 0) parts.push(DIGIT_WORDS[donvi]);
+  } else {
+    if (donvi > 0) {
+      if (tram > 0 || full) parts.push("lẻ");
+      parts.push(DIGIT_WORDS[donvi]);
+    }
+  }
+  return parts.join(" ").trim();
+}
+
+const SCALE_WORDS = ["", "nghìn", "triệu", "tỷ", "nghìn tỷ", "triệu tỷ"];
+
+/** docTienBangChu(1250000) -> "Một triệu hai trăm năm mươi nghìn đồng" */
+function docTienBangChu(amount) {
+  let n = Math.round(Math.abs(Number(amount) || 0));
+  const negative = (Number(amount) || 0) < 0;
+  if (n === 0) return "Không đồng";
+
+  const triples = [];
+  while (n > 0) {
+    triples.push(n % 1000);
+    n = Math.floor(n / 1000);
+  }
+
+  const chunks = [];
+  for (let i = triples.length - 1; i >= 0; i--) {
+    if (triples[i] === 0) continue;
+    const words = readTriple(triples[i], i !== triples.length - 1);
+    chunks.push(words + (SCALE_WORDS[i] ? " " + SCALE_WORDS[i] : ""));
+  }
+
+  let text = chunks.join(" ").replace(/\s+/g, " ").trim() + " đồng";
+  if (negative) text = "Âm " + text;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /* Export one or more tables to a single .xlsx file, downloaded via the browser. */
 function exportExcel(filename, sheets) {
   try {
@@ -104,6 +164,7 @@ const STORE_KEYS = {
   auditlog: "ntcons:auditlog",
   warehouses: "ntcons:warehouses",
   einvoiceconfig: "ntcons:einvoiceconfig",
+  company: "ntcons:company",
   counters: "ntcons:counters",
 };
 
@@ -121,11 +182,84 @@ async function storageGet(key, shared = SHARED) {
     return null;
   }
 }
+/* ------------------------------------------------------------------ */
+/* Toast — thông báo ngắn ở góc màn hình                                */
+/* ------------------------------------------------------------------ */
+let TOAST_PUSH = null;
+function registerToastHost(fn) {
+  TOAST_PUSH = fn;
+}
+/** toast("Đã lưu hàng hóa")  |  toast("Không lưu được", "error") */
+function toast(text, tone = "success") {
+  if (!text) return;
+  TOAST_PUSH?.({ id: uid("T"), text, tone });
+}
+
+function ToastHost() {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    registerToastHost((t) => {
+      setItems((cur) => [...cur.slice(-3), t]);
+      setTimeout(() => setItems((cur) => cur.filter((x) => x.id !== t.id)), 3200);
+    });
+    return () => registerToastHost(null);
+  }, []);
+  if (items.length === 0) return null;
+  const tones = {
+    success: { bg: COLORS.greenBg, fg: COLORS.green, Icon: CheckCircle2 },
+    error: { bg: COLORS.redBg, fg: COLORS.red, Icon: AlertTriangle },
+    info: { bg: COLORS.goldBg, fg: COLORS.amber, Icon: Bell },
+  };
+  return (
+    <div className="fixed z-[200] bottom-4 right-4 left-4 sm:left-auto flex flex-col gap-2 items-stretch sm:items-end no-print" aria-live="polite">
+      {items.map((t) => {
+        const tone = tones[t.tone] || tones.success;
+        const Icon = tone.Icon;
+        return (
+          <div
+            key={t.id}
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg shadow-lg text-[13px] sm:max-w-sm"
+            style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, color: COLORS.text }}
+          >
+            <span className="w-6 h-6 rounded-full flex items-center justify-center shrink-0" style={{ background: tone.bg }}>
+              <Icon size={14} color={tone.fg} />
+            </span>
+            <span>{t.text}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Trạng thái đang ghi dữ liệu (hiển thị "Đang lưu..." trên thanh trên) */
+/* ------------------------------------------------------------------ */
+let SAVING_COUNT = 0;
+const SAVING_LISTENERS = new Set();
+function notifySaving() {
+  SAVING_LISTENERS.forEach((fn) => fn(SAVING_COUNT > 0));
+}
+function useSavingIndicator() {
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    SAVING_LISTENERS.add(setSaving);
+    return () => SAVING_LISTENERS.delete(setSaving);
+  }, []);
+  return saving;
+}
+
 async function storageSet(key, value, shared = SHARED) {
+  SAVING_COUNT += 1;
+  notifySaving();
   try {
     await window.storage.set(key, JSON.stringify(value), shared);
   } catch (e) {
     console.error("storage set failed", key, e);
+    toast("Không lưu được lên máy chủ — dữ liệu đang giữ tạm trên máy này.", "error");
+  } finally {
+    SAVING_COUNT = Math.max(0, SAVING_COUNT - 1);
+    notifySaving();
   }
 }
 
@@ -139,6 +273,8 @@ const STORE_LABELS = {
   pricelists: "Bảng giá", salesorders: "Đơn đặt hàng", employees: "Nhân viên", payroll: "Bảng lương",
   channels: "Kênh bán hàng", paymentmethods: "Phương thức thanh toán", users: "Người dùng (tài khoản)",
   warehouses: "Kho / Chi nhánh",
+  einvoiceconfig: "Cấu hình hóa đơn điện tử",
+  company: "Thông tin công ty",
 };
 const STORE_KEY_TO_LABEL = Object.fromEntries(
   Object.entries(STORE_KEYS).map(([short, full]) => [full, STORE_LABELS[short] || short])
@@ -148,6 +284,28 @@ const ACTION_LABELS = { create: "Tạo mới", update: "Cập nhật", delete: "
 let CURRENT_ACTOR = "?";
 function setCurrentActor(user) {
   CURRENT_ACTOR = user ? (user.ten || user.username || "?") : "?";
+}
+
+/* Thông tin công ty dùng chung cho mọi mẫu in. App() nạp từ store vào đây,
+   giống cách CURRENT_ACTOR hoạt động, để PrintDocument không phải nhận prop
+   xuyên qua hàng chục trang. */
+const COMPANY_DEFAULT = {
+  ten: "NTCONS",
+  ma_so_thue: "",
+  dia_chi: "",
+  dien_thoai: "",
+  email: "",
+  website: "",
+  ngan_hang: "",
+  so_tai_khoan: "",
+  chu_tai_khoan: "",
+  chan_trang: "",
+  kho_giay: "A4",
+  in_thue_gtgt: false,
+};
+let CURRENT_COMPANY = { ...COMPANY_DEFAULT };
+function setCurrentCompany(c) {
+  CURRENT_COMPANY = { ...COMPANY_DEFAULT, ...(c || {}) };
 }
 
 function describeRow(row) {
@@ -207,29 +365,34 @@ function useCollection(storeKey) {
     };
   }, [storeKey]);
 
+  // Nhãn dùng cho thông báo: "Đã lưu hàng hóa", "Đã xóa khách hàng", ...
+  const label = (STORE_KEY_TO_LABEL[storeKey] || "").toLowerCase();
+
   const persist = useCallback(
-    (next, action = "update") => {
+    (next, action = "update", opts = {}) => {
       setItems(next);
       storageSet(storeKey, next);
       logAudit(storeKey, action, { ten: `${action === "restore" ? "Khôi phục / nhập lại" : "Cập nhật hàng loạt"} ${(next || []).length} bản ghi` });
+      if (!opts.silent) toast(action === "restore" ? "Đã khôi phục dữ liệu." : "Đã lưu thay đổi.");
     },
-    [storeKey]
+    [storeKey, label]
   );
 
   const add = useCallback(
-    (row) => {
+    (row, opts = {}) => {
       setItems((cur) => {
         const next = [...(cur || []), row];
         storageSet(storeKey, next);
         return next;
       });
       logAudit(storeKey, "create", row);
+      if (!opts.silent) toast(`Đã thêm ${label || "bản ghi"}${describeRow(row) ? ` "${describeRow(row)}"` : ""}.`);
     },
-    [storeKey]
+    [storeKey, label]
   );
 
   const update = useCallback(
-    (id, patch) => {
+    (id, patch, opts = {}) => {
       let updatedRow = null;
       setItems((cur) => {
         const next = (cur || []).map((r) => {
@@ -241,12 +404,13 @@ function useCollection(storeKey) {
         return next;
       });
       logAudit(storeKey, "update", updatedRow);
+      if (!opts.silent) toast(`Đã cập nhật ${label || "bản ghi"}${describeRow(updatedRow) ? ` "${describeRow(updatedRow)}"` : ""}.`);
     },
-    [storeKey]
+    [storeKey, label]
   );
 
   const remove = useCallback(
-    (id) => {
+    (id, opts = {}) => {
       let removedRow = null;
       setItems((cur) => {
         removedRow = (cur || []).find((r) => r.id === id) || null;
@@ -255,8 +419,9 @@ function useCollection(storeKey) {
         return next;
       });
       logAudit(storeKey, "delete", removedRow);
+      if (!opts.silent) toast(`Đã xóa ${label || "bản ghi"}${describeRow(removedRow) ? ` "${describeRow(removedRow)}"` : ""}.`);
     },
-    [storeKey]
+    [storeKey, label]
   );
 
   return { items: items || [], loading: items === null, add, update, remove, persist, setItems };
@@ -265,7 +430,7 @@ function useCollection(storeKey) {
 /* ------------------------------------------------------------------ */
 /* Generic UI atoms                                                    */
 /* ------------------------------------------------------------------ */
-function Btn({ children, variant = "primary", size = "md", className = "", ...props }) {
+function Btn({ children, variant = "primary", size = "md", className = "", busy = false, disabled, ...props }) {
   const base =
     "inline-flex items-center gap-1.5 font-medium rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
   const sizes = { sm: "px-2.5 py-1.5 text-[13px]", md: "px-3.5 py-2 text-sm" };
@@ -283,11 +448,59 @@ function Btn({ children, variant = "primary", size = "md", className = "", ...pr
       : variant === "outline"
       ? { borderColor: COLORS.border, color: COLORS.text }
       : { color: COLORS.text };
+  // Chặn bấm 2 lần trên nút gửi biểu mẫu: lần bấm thứ 2 trong vòng 900ms bị bỏ qua,
+  // tránh tạo trùng chứng từ khi máy chủ phản hồi chậm.
+  const lastSubmitRef = useRef(0);
+  function handleClick(e) {
+    if (props.type === "submit") {
+      const now = Date.now();
+      if (now - lastSubmitRef.current < 900) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      lastSubmitRef.current = now;
+    }
+    props.onClick?.(e);
+  }
+
   return (
-    <button className={`${base} ${sizes[size]} ${variants[variant]} ${className}`} style={style} {...props}>
+    <button
+      className={`${base} ${sizes[size]} ${variants[variant]} ${className}`}
+      style={style}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
+      {...props}
+      onClick={handleClick}
+    >
+      {busy && <Loader2 size={14} className="animate-spin" />}
       {children}
     </button>
   );
+}
+
+/**
+ * Bọc một hàm lưu để chặn bấm 2 lần: trả về [hàm đã bọc, đang chạy].
+ * Nút Lưu dùng `busy` sẽ tự khóa trong lúc hàm chạy.
+ */
+function useSubmitGuard(fn) {
+  const [busy, setBusy] = useState(false);
+  const running = useRef(false);
+  const wrapped = useCallback(
+    async (...args) => {
+      if (running.current) return;
+      running.current = true;
+      setBusy(true);
+      try {
+        return await fn(...args);
+      } finally {
+        running.current = false;
+        setBusy(false);
+      }
+    },
+    [fn]
+  );
+  return [wrapped, busy];
 }
 
 function Badge({ tone = "muted", children }) {
@@ -308,12 +521,44 @@ function Badge({ tone = "muted", children }) {
 }
 
 function Modal({ title, onClose, children, width = "max-w-2xl" }) {
+  const panelRef = useRef(null);
+
+  // Esc để đóng + khóa cuộn nền + đưa focus vào hộp thoại.
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose?.();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    panelRef.current?.focus();
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-8 px-4" style={{ background: "rgba(14,36,56,0.45)" }}>
-      <div className={`w-full ${width} bg-white rounded-lg shadow-xl`} style={{ border: `1px solid ${COLORS.border}` }}>
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-8 px-4"
+      style={{ background: "rgba(14,36,56,0.45)" }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
+    >
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={typeof title === "string" ? title : undefined}
+        className={`w-full ${width} bg-white rounded-lg shadow-xl outline-none`}
+        style={{ border: `1px solid ${COLORS.border}` }}
+      >
         <div className="flex items-center justify-between px-5 py-3.5 border-b" style={{ borderColor: COLORS.border }}>
           <h3 className="text-[15px] font-semibold" style={{ color: COLORS.text }}>{title}</h3>
-          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100">
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100" aria-label="Đóng" title="Đóng (Esc)">
             <X size={18} color={COLORS.textMuted} />
           </button>
         </div>
@@ -429,6 +674,7 @@ const NAV_GROUPS = [
   {
     label: "Quản trị",
     items: [
+      { key: "company", label: "Thông tin công ty", icon: Building2 },
       { key: "users", label: "Người dùng", icon: UserCog },
       { key: "backup", label: "Sao lưu & Phục hồi", icon: Database },
       { key: "auditlog", label: "Nhật ký hoạt động", icon: History },
@@ -569,8 +815,82 @@ function Toolbar({ query, setQuery, placeholder, right }) {
   );
 }
 
-function Table({ columns, rows, onEdit, onDelete, onPrint, rowKey = "id" }) {
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
+
+/** Giá trị dùng để sắp xếp một ô: ưu tiên c.sortValue, sau đó r[c.key]. */
+function sortValueOf(col, row) {
+  if (typeof col.sortValue === "function") return col.sortValue(row);
+  return row?.[col.key];
+}
+
+function compareValues(a, b) {
+  const aEmpty = a === null || a === undefined || a === "";
+  const bEmpty = b === null || b === undefined || b === "";
+  if (aEmpty && bEmpty) return 0;
+  if (aEmpty) return 1;   // ô trống luôn xuống cuối
+  if (bEmpty) return -1;
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  const an = Number(a), bn = Number(b);
+  if (!Number.isNaN(an) && !Number.isNaN(bn) && String(a).trim() !== "" && String(b).trim() !== "") return an - bn;
+  return String(a).localeCompare(String(b), "vi");
+}
+
+function Table({
+  columns,
+  rows,
+  onEdit,
+  onDelete,
+  onPrint,
+  rowKey = "id",
+  sortable = true,
+  paginate = true,
+  pageSize: initialPageSize = 20,
+}) {
   const hasActions = !!(onEdit || onDelete || onPrint);
+  const [sort, setSort] = useState(null); // { key, dir: 'asc' | 'desc' }
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(initialPageSize);
+
+  const sortedRows = useMemo(() => {
+    if (!sort) return rows;
+    const col = columns.find((c) => c.key === sort.key);
+    if (!col) return rows;
+    const dir = sort.dir === "desc" ? -1 : 1;
+    return [...rows].sort((a, b) => dir * compareValues(sortValueOf(col, a), sortValueOf(col, b)));
+  }, [rows, sort, columns]);
+
+  const total = sortedRows.length;
+  const usePaging = paginate && pageSize !== "all" && total > pageSize;
+  const totalPages = usePaging ? Math.ceil(total / pageSize) : 1;
+
+  // Khi dữ liệu hoặc cách sắp xếp đổi, quay về trang hợp lệ.
+  useEffect(() => { setPage(1); }, [total, sort?.key, sort?.dir, pageSize]);
+  const safePage = Math.min(page, totalPages) || 1;
+
+  const pagedRows = usePaging
+    ? sortedRows.slice((safePage - 1) * pageSize, safePage * pageSize)
+    : sortedRows;
+
+  function toggleSort(col) {
+    if (!sortable || col.sortable === false) return;
+    setSort((cur) => {
+      if (!cur || cur.key !== col.key) return { key: col.key, dir: "asc" };
+      if (cur.dir === "asc") return { key: col.key, dir: "desc" };
+      return null; // lần bấm thứ 3 trả về thứ tự gốc
+    });
+  }
+
+  function SortIcon({ col }) {
+    if (!sortable || col.sortable === false) return null;
+    if (sort?.key !== col.key) return <ChevronsUpDown size={12} className="inline-block ml-1 opacity-40" />;
+    return sort.dir === "asc"
+      ? <ChevronUp size={12} className="inline-block ml-1" color={COLORS.navy} />
+      : <ChevronDown size={12} className="inline-block ml-1" color={COLORS.navy} />;
+  }
+
+  const firstShown = total === 0 ? 0 : (usePaging ? (safePage - 1) * pageSize + 1 : 1);
+  const lastShown = usePaging ? Math.min(safePage * pageSize, total) : total;
+
   return (
     <>
       {/* Desktop / tablet: full data table */}
@@ -578,20 +898,27 @@ function Table({ columns, rows, onEdit, onDelete, onPrint, rowKey = "id" }) {
         <table className="w-full text-[13px]">
           <thead>
             <tr style={{ background: COLORS.bg }}>
-              {columns.map((c) => (
-                <th
-                  key={c.key}
-                  className="px-3 py-2 font-semibold whitespace-nowrap"
-                  style={{ color: COLORS.textMuted, textAlign: c.align || "left", borderBottom: `1px solid ${COLORS.border}` }}
-                >
-                  {c.label}
-                </th>
-              ))}
+              {columns.map((c) => {
+                const canSort = sortable && c.sortable !== false;
+                return (
+                  <th
+                    key={c.key}
+                    className={`px-3 py-2 font-semibold whitespace-nowrap ${canSort ? "cursor-pointer select-none hover:text-slate-900" : ""}`}
+                    style={{ color: COLORS.textMuted, textAlign: c.align || "left", borderBottom: `1px solid ${COLORS.border}` }}
+                    onClick={() => toggleSort(c)}
+                    aria-sort={sort?.key === c.key ? (sort.dir === "asc" ? "ascending" : "descending") : undefined}
+                    title={canSort ? "Bấm để sắp xếp" : undefined}
+                  >
+                    {c.label}
+                    <SortIcon col={c} />
+                  </th>
+                );
+              })}
               {hasActions && <th className="px-3 py-2 w-24"></th>}
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
+            {pagedRows.map((r, i) => (
               <tr key={r[rowKey]} style={{ background: i % 2 ? "#FAFBFC" : "#fff", borderBottom: `1px solid ${COLORS.border}` }}>
                 {columns.map((c) => (
                   <td key={c.key} className="px-3 py-2 align-middle" style={{ textAlign: c.align || "left", color: COLORS.text, fontVariantNumeric: "tabular-nums" }}>
@@ -602,17 +929,17 @@ function Table({ columns, rows, onEdit, onDelete, onPrint, rowKey = "id" }) {
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-1 justify-end">
                       {onPrint && (
-                        <button onClick={() => onPrint(r)} className="p-1.5 rounded hover:bg-slate-100">
+                        <button onClick={() => onPrint(r)} className="p-1.5 rounded hover:bg-slate-100" aria-label="In chứng từ" title="In / Xuất PDF">
                           <Printer size={13.5} color={COLORS.textMuted} />
                         </button>
                       )}
                       {onEdit && (
-                        <button onClick={() => onEdit(r)} className="p-1.5 rounded hover:bg-slate-100">
+                        <button onClick={() => onEdit(r)} className="p-1.5 rounded hover:bg-slate-100" aria-label="Sửa" title="Sửa">
                           <Pencil size={13.5} color={COLORS.textMuted} />
                         </button>
                       )}
                       {onDelete && (
-                        <button onClick={() => onDelete(r)} className="p-1.5 rounded hover:bg-slate-100">
+                        <button onClick={() => onDelete(r)} className="p-1.5 rounded hover:bg-slate-100" aria-label="Xóa" title="Xóa">
                           <Trash2 size={13.5} color={COLORS.red} />
                         </button>
                       )}
@@ -627,7 +954,7 @@ function Table({ columns, rows, onEdit, onDelete, onPrint, rowKey = "id" }) {
 
       {/* Mobile: stacked cards — same data, one card per row */}
       <div className="sm:hidden space-y-2">
-        {rows.map((r) => (
+        {pagedRows.map((r) => (
           <div key={r[rowKey]} className="rounded-lg p-3" style={{ border: `1px solid ${COLORS.border}`, background: COLORS.surface }}>
             <div className="text-[14px] font-semibold mb-1.5" style={{ color: COLORS.text }}>
               {columns[0].render ? columns[0].render(r) : r[columns[0].key]}
@@ -645,17 +972,17 @@ function Table({ columns, rows, onEdit, onDelete, onPrint, rowKey = "id" }) {
             {hasActions && (
               <div className="flex items-center gap-1 justify-end mt-2 pt-2" style={{ borderTop: `1px solid ${COLORS.border}` }}>
                 {onPrint && (
-                  <button onClick={() => onPrint(r)} className="p-1.5 rounded hover:bg-slate-100">
+                  <button onClick={() => onPrint(r)} className="p-1.5 rounded hover:bg-slate-100" aria-label="In chứng từ">
                     <Printer size={15} color={COLORS.textMuted} />
                   </button>
                 )}
                 {onEdit && (
-                  <button onClick={() => onEdit(r)} className="p-1.5 rounded hover:bg-slate-100">
+                  <button onClick={() => onEdit(r)} className="p-1.5 rounded hover:bg-slate-100" aria-label="Sửa">
                     <Pencil size={15} color={COLORS.textMuted} />
                   </button>
                 )}
                 {onDelete && (
-                  <button onClick={() => onDelete(r)} className="p-1.5 rounded hover:bg-slate-100">
+                  <button onClick={() => onDelete(r)} className="p-1.5 rounded hover:bg-slate-100" aria-label="Xóa">
                     <Trash2 size={15} color={COLORS.red} />
                   </button>
                 )}
@@ -664,6 +991,48 @@ function Table({ columns, rows, onEdit, onDelete, onPrint, rowKey = "id" }) {
           </div>
         ))}
       </div>
+
+      {/* Phân trang — chỉ hiện khi dữ liệu vượt quá một trang */}
+      {paginate && total > PAGE_SIZE_OPTIONS[0] && (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mt-2.5 text-[12.5px]" style={{ color: COLORS.textMuted }}>
+          <div className="flex items-center gap-2">
+            <span>Hiển thị {firstShown}–{lastShown} / {total} dòng</span>
+            <select
+              className="rounded border px-1.5 py-1 text-[12.5px] outline-none"
+              style={{ borderColor: COLORS.border, color: COLORS.text }}
+              value={pageSize}
+              onChange={(e) => setPageSize(e.target.value === "all" ? "all" : Number(e.target.value))}
+              aria-label="Số dòng mỗi trang"
+            >
+              {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} dòng/trang</option>)}
+              <option value="all">Tất cả</option>
+            </select>
+          </div>
+          {usePaging && (
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setPage(safePage - 1)}
+                disabled={safePage <= 1}
+                className="p-1.5 rounded border disabled:opacity-40 hover:bg-slate-50"
+                style={{ borderColor: COLORS.border }}
+                aria-label="Trang trước"
+              >
+                <ChevronLeft size={14} color={COLORS.text} />
+              </button>
+              <span style={{ color: COLORS.text }}>Trang {safePage} / {totalPages}</span>
+              <button
+                onClick={() => setPage(safePage + 1)}
+                disabled={safePage >= totalPages}
+                className="p-1.5 rounded border disabled:opacity-40 hover:bg-slate-50"
+                style={{ borderColor: COLORS.border }}
+                aria-label="Trang sau"
+              >
+                <ChevronRight size={14} color={COLORS.text} />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }
@@ -677,8 +1046,13 @@ function ProductsPage({ store, warehouses }) {
   const [editing, setEditing] = useState(null); // null | {} | row
   const [toDelete, setToDelete] = useState(null);
 
+  const q = query.trim().toLowerCase();
   const filtered = items.filter(
-    (p) => !query || p.ten?.toLowerCase().includes(query.toLowerCase()) || p.ma?.toLowerCase().includes(query.toLowerCase())
+    (p) =>
+      !q ||
+      p.ten?.toLowerCase().includes(q) ||
+      p.ma?.toLowerCase().includes(q) ||
+      p.ma_vach?.toLowerCase().includes(q)
   );
 
   function save(form) {
@@ -694,7 +1068,7 @@ function ProductsPage({ store, warehouses }) {
         subtitle={`${items.length} mặt hàng`}
         action={<Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm hàng hóa</Btn>}
       />
-      <Toolbar query={query} setQuery={setQuery} placeholder="Tìm mã hoặc tên hàng hóa..." />
+      <Toolbar query={query} setQuery={setQuery} placeholder="Tìm theo mã, tên hoặc mã vạch..." />
       {items.length === 0 ? (
         <EmptyState icon={Package} title="Chưa có hàng hóa" hint="Thêm mặt hàng đầu tiên để bắt đầu bán hàng." action={<Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm hàng hóa</Btn>} />
       ) : (
@@ -863,7 +1237,15 @@ function PartnerPage({ store, kind, priceLists }) {
   const prefix = kind === "customer" ? "KH" : "NCC";
   const priceListName = (id) => (priceLists || []).find((p) => p.id === id)?.ten;
 
-  const filtered = items.filter((p) => !query || p.ten?.toLowerCase().includes(query.toLowerCase()) || p.dien_thoai?.includes(query));
+  const q = query.trim().toLowerCase();
+  const filtered = items.filter(
+    (p) =>
+      !q ||
+      p.ten?.toLowerCase().includes(q) ||
+      p.dien_thoai?.includes(q) ||
+      p.dia_chi?.toLowerCase().includes(q) ||
+      p.ma_so_thue?.toLowerCase().includes(q)
+  );
 
   function save(form) {
     if (form.id) update(form.id, form);
@@ -878,7 +1260,7 @@ function PartnerPage({ store, kind, priceLists }) {
         subtitle={`${items.length} ${label}`}
         action={<Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm {label}</Btn>}
       />
-      <Toolbar query={query} setQuery={setQuery} placeholder={`Tìm tên hoặc SĐT ${label}...`} />
+      <Toolbar query={query} setQuery={setQuery} placeholder={`Tìm tên, SĐT, địa chỉ hoặc MST ${label}...`} />
       {items.length === 0 ? (
         <EmptyState icon={kind === "customer" ? Users : Truck} title={`Chưa có ${label}`} hint={`Thêm ${label} đầu tiên để bắt đầu ghi nhận giao dịch.`} action={<Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm {label}</Btn>} />
       ) : (
@@ -915,6 +1297,7 @@ function PartnerForm({ initial, onSave, onCancel, kind, priceLists }) {
     ten: initial.ten || "",
     dien_thoai: initial.dien_thoai || "",
     dia_chi: initial.dia_chi || "",
+    ma_so_thue: initial.ma_so_thue || "",
     no_dau: initial.no_dau || 0,
     bang_gia_id: initial.bang_gia_id || "",
     chiet_khau_pct: initial.chiet_khau_pct || 0,
@@ -928,6 +1311,7 @@ function PartnerForm({ initial, onSave, onCancel, kind, priceLists }) {
         <Field label="Nợ đầu kỳ"><input type="number" className={inputCls} style={inputStyle} value={f.no_dau} onChange={(e) => setF({ ...f, no_dau: +e.target.value })} /></Field>
       </div>
       <Field label="Địa chỉ"><input className={inputCls} style={inputStyle} value={f.dia_chi} onChange={(e) => setF({ ...f, dia_chi: e.target.value })} /></Field>
+      <Field label="Mã số thuế"><input className={inputCls} style={inputStyle} value={f.ma_so_thue} onChange={(e) => setF({ ...f, ma_so_thue: e.target.value })} placeholder="Để in lên hóa đơn (nếu có)" /></Field>
       {kind === "customer" && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
           <Field label="Bảng giá áp dụng">
@@ -1211,6 +1595,128 @@ function adjustProductStock(product, delta, whId) {
 /* ------------------------------------------------------------------ */
 const EINVOICE_PROVIDERS = ["Viettel S-Invoice", "MISA meInvoice", "VNPT Invoice", "Khác / chưa chọn"];
 
+const PAPER_SIZES = [
+  { key: "A4", label: "A4 — khổ dọc (mặc định)" },
+  { key: "A5", label: "A5 — khổ ngang, nửa tờ A4" },
+  { key: "K80", label: "K80 — máy in nhiệt 80mm (POS)" },
+];
+
+function CompanySettingsPage({ store }) {
+  const { items, persist } = store;
+  const saved = items[0] || null;
+  const [f, setF] = useState({ ...COMPANY_DEFAULT, ...(saved || {}) });
+
+  const [submit, busy] = useSubmitGuard(async (e) => {
+    e.preventDefault();
+    const row = { ...f, id: "COMPANY" };
+    persist([row], "update", { silent: true });
+    setCurrentCompany(row);
+    toast("Đã lưu thông tin công ty — các mẫu in sẽ dùng thông tin này.");
+  });
+
+  return (
+    <div>
+      <PageHeader
+        title="Thông tin công ty"
+        subtitle="Dùng chung cho tất cả mẫu in: hóa đơn, phiếu thu/chi, phiếu kho, phiếu trả hàng"
+      />
+
+      <form onSubmit={submit} className="grid grid-cols-1 lg:grid-cols-3 gap-3 items-start">
+        <div className="lg:col-span-2 space-y-3">
+          <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+            <div className="text-[13.5px] font-semibold mb-3" style={{ color: COLORS.text }}>Pháp nhân</div>
+            <Field label="Tên công ty / hộ kinh doanh" required>
+              <input required className={inputCls} style={inputStyle} value={f.ten} onChange={(e) => setF({ ...f, ten: e.target.value })} placeholder="VD: CÔNG TY TNHH XÂY DỰNG NTCONS" />
+            </Field>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
+              <Field label="Mã số thuế">
+                <input className={inputCls} style={inputStyle} value={f.ma_so_thue} onChange={(e) => setF({ ...f, ma_so_thue: e.target.value })} placeholder="VD: 0123456789" />
+              </Field>
+              <Field label="Điện thoại">
+                <input className={inputCls} style={inputStyle} value={f.dien_thoai} onChange={(e) => setF({ ...f, dien_thoai: e.target.value })} />
+              </Field>
+            </div>
+            <Field label="Địa chỉ">
+              <input className={inputCls} style={inputStyle} value={f.dia_chi} onChange={(e) => setF({ ...f, dia_chi: e.target.value })} placeholder="Số nhà, đường, phường/xã, tỉnh/thành" />
+            </Field>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
+              <Field label="Email"><input type="email" className={inputCls} style={inputStyle} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
+              <Field label="Website"><input className={inputCls} style={inputStyle} value={f.website} onChange={(e) => setF({ ...f, website: e.target.value })} /></Field>
+            </div>
+          </div>
+
+          <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+            <div className="text-[13.5px] font-semibold mb-3" style={{ color: COLORS.text }}>Tài khoản ngân hàng (in trên hóa đơn)</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
+              <Field label="Ngân hàng"><input className={inputCls} style={inputStyle} value={f.ngan_hang} onChange={(e) => setF({ ...f, ngan_hang: e.target.value })} placeholder="VD: Vietcombank — CN Quy Nhơn" /></Field>
+              <Field label="Số tài khoản"><input className={inputCls} style={inputStyle} value={f.so_tai_khoan} onChange={(e) => setF({ ...f, so_tai_khoan: e.target.value })} /></Field>
+            </div>
+            <Field label="Chủ tài khoản"><input className={inputCls} style={inputStyle} value={f.chu_tai_khoan} onChange={(e) => setF({ ...f, chu_tai_khoan: e.target.value })} /></Field>
+          </div>
+
+          <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+            <div className="text-[13.5px] font-semibold mb-3" style={{ color: COLORS.text }}>Tùy chọn in</div>
+            <Field label="Khổ giấy mặc định">
+              <select className={inputCls} style={inputStyle} value={f.kho_giay} onChange={(e) => setF({ ...f, kho_giay: e.target.value })}>
+                {PAPER_SIZES.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+              </select>
+            </Field>
+            <label className="flex items-start gap-2 mb-3 cursor-pointer">
+              <input type="checkbox" className="mt-0.5" checked={!!f.in_thue_gtgt} onChange={(e) => setF({ ...f, in_thue_gtgt: e.target.checked })} />
+              <span className="text-[12.5px]" style={{ color: COLORS.text }}>
+                In thêm dòng <b>Thuế GTGT</b> và <b>Tổng thanh toán</b> trên hóa đơn bán hàng
+                <span className="block text-[11.5px] mt-0.5" style={{ color: COLORS.textMuted }}>
+                  Thuế được tính từ thuế suất khai trên từng mặt hàng. Giá bán đang nhập là giá <b>chưa gồm thuế</b>.
+                </span>
+              </span>
+            </label>
+            <Field label="Chân trang chứng từ">
+              <input className={inputCls} style={inputStyle} value={f.chan_trang} onChange={(e) => setF({ ...f, chan_trang: e.target.value })} placeholder="VD: Cảm ơn quý khách — hàng đã mua vui lòng đổi trong 7 ngày" />
+            </Field>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Btn type="submit" busy={busy}>Lưu thông tin công ty</Btn>
+          </div>
+        </div>
+
+        {/* Xem trước phần đầu chứng từ */}
+        <div className="rounded-lg p-4 lg:sticky lg:top-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+          <div className="text-[13.5px] font-semibold mb-3" style={{ color: COLORS.text }}>Xem trước đầu chứng từ</div>
+          <div className="rounded-md p-3 text-[11.5px] leading-relaxed" style={{ background: "#fff", border: `1px dashed ${COLORS.border}`, color: "#1a1a1a" }}>
+            <div className="flex items-start gap-2">
+              <img src={LOGO_SRC} alt="" className="w-10 h-10 object-contain shrink-0" />
+              <div className="min-w-0">
+                <div className="font-bold uppercase">{f.ten || "Tên công ty"}</div>
+                {f.ma_so_thue && <div>MST: {f.ma_so_thue}</div>}
+                {f.dia_chi && <div>{f.dia_chi}</div>}
+                {(f.dien_thoai || f.email) && <div>{[f.dien_thoai && `ĐT: ${f.dien_thoai}`, f.email].filter(Boolean).join(" · ")}</div>}
+                {f.so_tai_khoan && <div>STK: {f.so_tai_khoan}{f.ngan_hang ? ` — ${f.ngan_hang}` : ""}</div>}
+              </div>
+            </div>
+            <div className="mt-3 pt-2" style={{ borderTop: "1px solid #ddd" }}>
+              <div className="text-center font-bold uppercase text-[13px]">Hóa đơn bán hàng</div>
+              <div className="text-center">Số: HD000123 · Ngày {fmtDate(todayStr())}</div>
+            </div>
+            <div className="mt-3 pt-2 text-right" style={{ borderTop: "1px solid #ddd" }}>
+              <div>Cộng tiền hàng: 1.250.000đ</div>
+              {f.in_thue_gtgt && <div>Thuế GTGT: 125.000đ</div>}
+              <div className="font-bold">Tổng thanh toán: {f.in_thue_gtgt ? "1.375.000đ" : "1.250.000đ"}</div>
+              <div className="italic text-left mt-1">
+                Bằng chữ: {docTienBangChu(f.in_thue_gtgt ? 1375000 : 1250000)}
+              </div>
+            </div>
+            {f.chan_trang && <div className="mt-3 text-center italic">{f.chan_trang}</div>}
+          </div>
+          <div className="text-[11.5px] mt-3" style={{ color: COLORS.textMuted }}>
+            Khổ giấy mặc định: <b style={{ color: COLORS.text }}>{f.kho_giay}</b>. Khi in vẫn có thể đổi khổ ngay trên màn hình in.
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function EInvoiceSettingsPage({ store }) {
   const { items, persist } = store;
   const config = items[0] || null;
@@ -1286,12 +1792,25 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
   const partnerName = (id) => partners.find((p) => p.id === id)?.ten || "—";
   const channelName = (id) => (channels || []).find((c) => c.id === id)?.ten;
 
+  /* Thuế GTGT chỉ hiện trên bản in khi bật trong Thông tin công ty.
+     Thuế tính từ thuế suất khai trên từng mặt hàng; giá bán đang nhập là giá chưa thuế. */
+  function vatOf(inv) {
+    if (!CURRENT_COMPANY.in_thue_gtgt) return 0;
+    const ratio = inv.tam_tinh > 0 ? (inv.tong_tien || 0) / inv.tam_tinh : 1; // phân bổ chiết khấu
+    return Math.round(
+      (inv.items || []).reduce((s, it) => {
+        const rate = products.find((p) => p.id === it.hang_hoa_id)?.thue_suat_vat ?? 0;
+        return s + (it.so_luong || 0) * (it.don_gia || 0) * ratio * (rate / 100);
+      }, 0)
+    );
+  }
+
   function openPrint(inv) {
     const config = einvoiceStore?.items?.[0];
     if (isSale && config && !inv.so_hddt) {
       const soHddt = String(config.so_hien_tai).padStart(7, "0");
-      invStore.update(inv.id, { so_hddt: soHddt, mau_so_hddt: config.mau_so, ky_hieu_hddt: config.ky_hieu });
-      einvoiceStore.persist([{ ...config, so_hien_tai: (Number(config.so_hien_tai) || 1) + 1 }]);
+      invStore.update(inv.id, { so_hddt: soHddt, mau_so_hddt: config.mau_so, ky_hieu_hddt: config.ky_hieu }, { silent: true });
+      einvoiceStore.persist([{ ...config, so_hien_tai: (Number(config.so_hien_tai) || 1) + 1 }], "update", { silent: true });
       setPrinting({ ...inv, so_hddt: soHddt, mau_so_hddt: config.mau_so, ky_hieu_hddt: config.ky_hieu });
     } else {
       setPrinting(inv);
@@ -1418,11 +1937,17 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
             ngay: printing.ngay,
             partnerLabel: isSale ? "Khách hàng" : "Nhà cung cấp",
             partnerName: partnerName(printing.doi_tac_id),
+            partnerAddress: partners.find((p) => p.id === printing.doi_tac_id)?.dia_chi,
+            partnerTax: partners.find((p) => p.id === printing.doi_tac_id)?.ma_so_thue,
             items: printing.items,
+            subtotal: printing.tam_tinh ?? printing.tong_tien,
+            discount: (printing.tam_tinh ?? 0) - (printing.tong_tien ?? 0) > 0 ? printing.tam_tinh - printing.tong_tien : 0,
+            vat: vatOf(printing),
             total: printing.tong_tien,
             soHddt: printing.so_hddt,
             mauSoHddt: printing.mau_so_hddt,
             kyHieuHddt: printing.ky_hieu_hddt,
+            signers: ["Người mua hàng", "Người bán hàng", "Thủ trưởng đơn vị"],
           }}
         />
       )}
@@ -3626,72 +4151,209 @@ function ReturnForm({ isSaleReturn, invoices, partners, products, warehouses, on
 /* ------------------------------------------------------------------ */
 /* In phiếu / Xuất PDF (in qua hộp thoại in của trình duyệt)            */
 /* ------------------------------------------------------------------ */
+const PAPER_CSS = {
+  A4: { page: "@page { size: A4 portrait; margin: 12mm; }", width: 760, base: 13 },
+  A5: { page: "@page { size: A5 landscape; margin: 8mm; }", width: 700, base: 12 },
+  K80: { page: "@page { size: 80mm auto; margin: 3mm; }", width: 300, base: 11 },
+};
+
 function PrintDocument({ doc, onClose }) {
+  const company = CURRENT_COMPANY;
+  const [paper, setPaper] = useState(company.kho_giay || "A4");
+  const [ready, setReady] = useState(false);
+
+  // Cho phép chọn khổ giấy trước khi bung hộp thoại in của trình duyệt.
   useEffect(() => {
-    const t = setTimeout(() => window.print(), 200);
+    const t = setTimeout(() => setReady(true), 150);
     return () => clearTimeout(t);
   }, []);
+  useEffect(() => {
+    function onKey(e) { if (e.key === "Escape") onClose?.(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   if (!doc) return null;
-  const { title, ma, ngay, partnerLabel, partnerName, items, total, note, soHddt, mauSoHddt, kyHieuHddt } = doc;
+  const {
+    title, ma, ngay, partnerLabel, partnerName, partnerAddress, partnerTax,
+    items, total, note, soHddt, mauSoHddt, kyHieuHddt,
+    subtotal, discount, vat, signers,
+  } = doc;
+
+  const cfg = PAPER_CSS[paper] || PAPER_CSS.A4;
+  const narrow = paper === "K80";
+
+  const lineSum = (items || []).reduce((s, it) => s + (it.so_luong || 0) * (it.don_gia || 0), 0);
+  const shownSubtotal = subtotal != null ? subtotal : lineSum;
+  const shownDiscount = discount || 0;
+  const shownVat = vat || 0;
+  const grandTotal = (total != null ? total : shownSubtotal - shownDiscount) + shownVat;
+
+  const signerList = signers || ["Người lập phiếu", "Người giao/nhận hàng", "Thủ kho"];
+
   return (
     <div id="ntcons-print-root">
       <style>{`
+        ${cfg.page}
         @media print {
           body * { visibility: hidden; }
           #ntcons-print-root, #ntcons-print-root * { visibility: visible; }
           #ntcons-print-root { position: absolute; top: 0; left: 0; width: 100%; }
+          #ntcons-print-sheet { box-shadow: none !important; margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: none !important; }
           .no-print { display: none !important; }
+          table { page-break-inside: auto; }
+          tr { page-break-inside: avoid; }
+          thead { display: table-header-group; }
         }
       `}</style>
-      <div className="fixed inset-0 z-[100] bg-white overflow-y-auto p-10" style={{ color: "#1a1a1a" }}>
-        <button onClick={onClose} className="no-print fixed top-4 right-4 px-3 py-1.5 rounded-md text-[13px] font-medium" style={{ background: COLORS.navy, color: "#fff" }}>
-          Đóng
-        </button>
-        <div className="flex items-center gap-3 mb-6 pb-4" style={{ borderBottom: "2px solid #1a1a1a" }}>
-          <img src={LOGO_SRC} alt="NTCONS" className="w-14 h-14 object-contain" />
-          <div>
-            <div className="text-[16px] font-bold">NTCONS</div>
-            <div className="text-[12px] text-gray-500">banhang.ntcons — Hệ thống quản lý bán hàng</div>
-          </div>
-          <div className="ml-auto text-right">
-            <div className="text-[18px] font-bold uppercase">{title}</div>
-            <div className="text-[12px] text-gray-500">Số: {ma} · Ngày {fmtDate(ngay)}</div>
-            {soHddt && (
-              <div className="text-[12px] text-gray-500">Mẫu số {mauSoHddt} — Ký hiệu {kyHieuHddt} — Số {soHddt}</div>
+
+      <div className="fixed inset-0 z-[100] overflow-y-auto py-6 px-3" style={{ background: "#F1EEE7", color: "#1a1a1a" }}>
+        {/* Thanh công cụ — không in ra giấy */}
+        <div className="no-print flex flex-wrap items-center justify-center gap-2 mb-4">
+          <select
+            className="rounded-md border px-2 py-1.5 text-[13px] bg-white outline-none"
+            style={{ borderColor: COLORS.border }}
+            value={paper}
+            onChange={(e) => setPaper(e.target.value)}
+            aria-label="Khổ giấy"
+          >
+            {PAPER_SIZES.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+          <button onClick={() => window.print()} className="px-3 py-1.5 rounded-md text-[13px] font-medium inline-flex items-center gap-1.5" style={{ background: COLORS.navy, color: "#fff" }}>
+            <Printer size={14} /> In / Xuất PDF
+          </button>
+          <button onClick={onClose} className="px-3 py-1.5 rounded-md text-[13px] font-medium bg-white border" style={{ borderColor: COLORS.border, color: COLORS.text }}>
+            Đóng (Esc)
+          </button>
+        </div>
+
+        <div
+          id="ntcons-print-sheet"
+          className="bg-white mx-auto shadow-lg"
+          style={{ width: cfg.width, maxWidth: "100%", padding: narrow ? 14 : 36, fontSize: cfg.base }}
+        >
+          {/* Đầu chứng từ: thông tin công ty + tên chứng từ */}
+          <div className={narrow ? "text-center" : "flex items-start gap-3 pb-3"} style={narrow ? { paddingBottom: 8 } : { borderBottom: "2px solid #1a1a1a" }}>
+            <img src={LOGO_SRC} alt="" className={narrow ? "w-12 h-12 object-contain mx-auto mb-1" : "w-14 h-14 object-contain shrink-0"} />
+            <div className={narrow ? "" : "min-w-0"} style={{ lineHeight: 1.45 }}>
+              <div className="font-bold uppercase" style={{ fontSize: cfg.base + 2 }}>{company.ten || "NTCONS"}</div>
+              {company.ma_so_thue && <div>MST: {company.ma_so_thue}</div>}
+              {company.dia_chi && <div>{company.dia_chi}</div>}
+              {(company.dien_thoai || company.email) && (
+                <div>{[company.dien_thoai && `ĐT: ${company.dien_thoai}`, company.email].filter(Boolean).join(" · ")}</div>
+              )}
+              {company.so_tai_khoan && (
+                <div>STK: {company.so_tai_khoan}{company.ngan_hang ? ` — ${company.ngan_hang}` : ""}{company.chu_tai_khoan ? ` (${company.chu_tai_khoan})` : ""}</div>
+              )}
+            </div>
+            {!narrow && (
+              <div className="ml-auto text-right shrink-0" style={{ lineHeight: 1.45 }}>
+                <div className="font-bold uppercase" style={{ fontSize: cfg.base + 5 }}>{title}</div>
+                <div>Số: {ma} · Ngày {fmtDate(ngay)}</div>
+                {soHddt && <div>Mẫu số {mauSoHddt} — Ký hiệu {kyHieuHddt} — Số {soHddt}</div>}
+              </div>
             )}
           </div>
-        </div>
-        <div className="mb-4 text-[13.5px]">{partnerLabel}: <span className="font-semibold">{partnerName}</span></div>
-        <table className="w-full text-[13px] border-collapse mb-6">
-          <thead>
-            <tr>
-              <th className="border px-2 py-1.5 text-left">Hàng hóa</th>
-              <th className="border px-2 py-1.5 text-right">SL</th>
-              <th className="border px-2 py-1.5 text-right">Đơn giá</th>
-              <th className="border px-2 py-1.5 text-right">Thành tiền</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it, i) => (
-              <tr key={i}>
-                <td className="border px-2 py-1.5">{it.ten}</td>
-                <td className="border px-2 py-1.5 text-right">{it.so_luong}</td>
-                <td className="border px-2 py-1.5 text-right">{fmtVND(it.don_gia)}</td>
-                <td className="border px-2 py-1.5 text-right">{fmtVND(it.so_luong * it.don_gia)}</td>
+
+          {narrow && (
+            <div className="text-center mb-2 pb-2" style={{ borderBottom: "1px dashed #999" }}>
+              <div className="font-bold uppercase" style={{ fontSize: cfg.base + 3 }}>{title}</div>
+              <div>Số: {ma} · {fmtDate(ngay)}</div>
+              {soHddt && <div>Mẫu {mauSoHddt} — KH {kyHieuHddt} — Số {soHddt}</div>}
+            </div>
+          )}
+
+          {/* Đối tác */}
+          <div className={narrow ? "mb-2" : "my-4"} style={{ lineHeight: 1.6 }}>
+            <div>{partnerLabel}: <span className="font-semibold">{partnerName}</span></div>
+            {partnerTax && <div>Mã số thuế: {partnerTax}</div>}
+            {partnerAddress && <div>Địa chỉ: {partnerAddress}</div>}
+          </div>
+
+          {/* Chi tiết hàng hóa */}
+          <table className="w-full border-collapse" style={{ fontSize: cfg.base }}>
+            <thead>
+              <tr>
+                {!narrow && <th className="border px-2 py-1.5 text-center" style={{ width: 34 }}>STT</th>}
+                <th className="border px-2 py-1.5 text-left">Hàng hóa</th>
+                <th className="border px-2 py-1.5 text-right">SL</th>
+                <th className="border px-2 py-1.5 text-right">Đơn giá</th>
+                <th className="border px-2 py-1.5 text-right">Thành tiền</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="flex justify-end text-[15px] font-bold mb-10">Tổng cộng: {fmtVND(total)}</div>
-        {note && <div className="mb-10 text-[13px] text-gray-600">Ghi chú: {note}</div>}
-        <div className="grid grid-cols-3 gap-6 text-center text-[12.5px] mt-16">
-          <div><div className="font-semibold mb-12">Người lập phiếu</div><div className="text-gray-400">(Ký, ghi rõ họ tên)</div></div>
-          <div><div className="font-semibold mb-12">Người giao/nhận hàng</div><div className="text-gray-400">(Ký, ghi rõ họ tên)</div></div>
-          <div><div className="font-semibold mb-12">Thủ kho</div><div className="text-gray-400">(Ký, ghi rõ họ tên)</div></div>
+            </thead>
+            <tbody>
+              {(items || []).map((it, i) => (
+                <tr key={i}>
+                  {!narrow && <td className="border px-2 py-1.5 text-center">{i + 1}</td>}
+                  <td className="border px-2 py-1.5">{it.ten}</td>
+                  <td className="border px-2 py-1.5 text-right">{it.so_luong}</td>
+                  <td className="border px-2 py-1.5 text-right">{fmtVND(it.don_gia)}</td>
+                  <td className="border px-2 py-1.5 text-right">{fmtVND((it.so_luong || 0) * (it.don_gia || 0))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* Tổng hợp tiền */}
+          <div className="flex justify-end mt-3">
+            <div style={{ minWidth: narrow ? "100%" : 300 }}>
+              <div className="flex justify-between py-0.5">
+                <span>Cộng tiền hàng</span><span>{fmtVND(shownSubtotal)}</span>
+              </div>
+              {shownDiscount > 0 && (
+                <div className="flex justify-between py-0.5">
+                  <span>Chiết khấu</span><span>-{fmtVND(shownDiscount)}</span>
+                </div>
+              )}
+              {shownVat > 0 && (
+                <div className="flex justify-between py-0.5">
+                  <span>Thuế GTGT</span><span>{fmtVND(shownVat)}</span>
+                </div>
+              )}
+              <div className="flex justify-between py-1 mt-1 font-bold" style={{ borderTop: "1px solid #1a1a1a", fontSize: cfg.base + 2 }}>
+                <span>Tổng thanh toán</span><span>{fmtVND(grandTotal)}</span>
+              </div>
+            </div>
+          </div>
+          <div className="mt-1.5 italic">Số tiền bằng chữ: {docTienBangChu(grandTotal)}</div>
+
+          {note && <div className="mt-3">Ghi chú: {note}</div>}
+
+          {/* Chữ ký — máy in nhiệt K80 không in phần này */}
+          {!narrow && (
+            <div className={`grid gap-6 text-center mt-12`} style={{ gridTemplateColumns: `repeat(${signerList.length}, minmax(0, 1fr))` }}>
+              {signerList.map((s) => (
+                <div key={s}>
+                  <div className="font-semibold">{s}</div>
+                  <div className="text-gray-500" style={{ fontSize: cfg.base - 1 }}>(Ký, ghi rõ họ tên)</div>
+                  <div style={{ height: 64 }} />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {company.chan_trang && (
+            <div className="text-center italic mt-6" style={{ fontSize: cfg.base - 1 }}>{company.chan_trang}</div>
+          )}
         </div>
       </div>
+
+      {/* Tự mở hộp thoại in sau khi bản xem trước đã dựng xong */}
+      <AutoPrint when={ready} />
     </div>
   );
+}
+
+/** Gọi window.print() đúng một lần, sau khi bản xem trước đã render. */
+function AutoPrint({ when }) {
+  const done = useRef(false);
+  useEffect(() => {
+    if (when && !done.current) {
+      done.current = true;
+      window.print();
+    }
+  }, [when]);
+  return null;
 }
 
 function PrintButton({ onClick }) {
@@ -4219,6 +4881,17 @@ function computeNotifications(sales, products) {
   return notifs;
 }
 
+function SavingIndicator() {
+  const saving = useSavingIndicator();
+  if (!saving) return null;
+  return (
+    <span className="flex items-center gap-1.5 text-[12.5px]" style={{ color: COLORS.textMuted }} aria-live="polite">
+      <Loader2 size={13} className="animate-spin" />
+      <span className="hidden sm:inline">Đang lưu...</span>
+    </span>
+  );
+}
+
 function NotificationsBell({ notifications, onNavigate }) {
   const [open, setOpen] = useState(false);
   return (
@@ -4290,6 +4963,7 @@ export default function App() {
   const paymentMethodStore = useCollection(STORE_KEYS.paymentmethods);
   const warehouseStore = useCollection(STORE_KEYS.warehouses);
   const einvoiceStore = useCollection(STORE_KEYS.einvoiceconfig);
+  const companyStore = useCollection(STORE_KEYS.company);
   const auditLogStore = useCollection(STORE_KEYS.auditlog);
   const auditStoreRef = useRef(null);
   auditStoreRef.current = auditLogStore;
@@ -4297,13 +4971,18 @@ export default function App() {
 
   const auth = useAuth(usersStore);
 
+  // Nạp thông tin công ty vào biến dùng chung cho mọi mẫu in.
+  const companyRow = companyStore.items[0];
+  useEffect(() => { setCurrentCompany(companyRow); }, [companyRow]);
+
   const anyLoading =
     productStore.loading || customerStore.loading || supplierStore.loading ||
     salesStore.loading || purchaseStore.loading || receiptStore.loading ||
     paymentStore.loading || voucherStore.loading || saleReturnStore.loading ||
     purchaseReturnStore.loading || priceListStore.loading || salesOrderStore.loading ||
     employeeStore.loading || payrollStore.loading || channelStore.loading ||
-    paymentMethodStore.loading || auditLogStore.loading || warehouseStore.loading || einvoiceStore.loading;
+    paymentMethodStore.loading || auditLogStore.loading || warehouseStore.loading || einvoiceStore.loading ||
+    companyStore.loading;
 
   const allowedPages = auth.currentUser ? (ROLE_PAGES[auth.currentUser.role] || null) : [];
 
@@ -4422,6 +5101,7 @@ export default function App() {
     ),
     auditlog: <AuditLogPage store={auditLogStore} />,
     einvoice: <EInvoiceSettingsPage store={einvoiceStore} />,
+    company: <CompanySettingsPage store={companyStore} />,
   };
 
   const notifications = anyLoading ? [] : computeNotifications(salesStore.items, productStore.items);
@@ -4450,7 +5130,8 @@ export default function App() {
           <span className="text-[13px] hidden sm:inline" style={{ color: COLORS.textMuted }}>banhang.ntcons</span>
           <ChevronRight size={13} color={COLORS.textMuted} className="hidden sm:inline" />
           <span className="text-[13.5px] font-medium truncate" style={{ color: COLORS.text }}>{currentLabel}</span>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-3">
+            <SavingIndicator />
             <NotificationsBell notifications={notifications} onNavigate={setPage} />
           </div>
         </div>
@@ -4462,6 +5143,7 @@ export default function App() {
           )}
         </div>
       </div>
+      <ToastHost />
     </div>
   );
 }
