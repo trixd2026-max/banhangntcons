@@ -26,6 +26,8 @@ Web app quản lý **bán hàng · kho · công nợ** cho doanh nghiệp vừa 
 - **Đa kho / chi nhánh**: quản lý tồn kho riêng theo từng địa điểm, phiếu chuyển kho giữa các kho, lọc xem tồn kho theo từng kho hoặc tổng hợp — chỉ hiện khi có từ 2 kho trở lên, không ảnh hưởng shop chỉ có 1 điểm bán
 - **Cảnh báo vượt tồn kho**: cảnh báo (không chặn) khi bán/xuất nhiều hơn số lượng đang tồn tại kho được chọn
 - **Hóa đơn điện tử (đánh số)**: cấu hình mẫu số/ký hiệu, tự động đánh số hóa đơn tuần tự khi in — *lưu ý: chỉ đánh số đúng chuẩn hình thức, chưa kết nối thật với Viettel/MISA/VNPT để phát hành hợp pháp, cần bạn đăng ký tài khoản merchant với 1 trong 3 nhà cung cấp để nối API thật*
+- **NXT & Báo cáo lọc theo kho**: xem báo cáo tổng hợp hoặc lọc riêng theo từng kho; phiếu chuyển kho không còn bị tính nhầm vào nhập/xuất khi xem tổng hợp
+- **Kiểm tra trùng mã hàng / mã vạch**: cảnh báo ngay khi lưu nếu mã hàng hoặc mã vạch đã tồn tại ở hàng hóa khác
 - **Nhật ký hoạt động**: tự động ghi lại mọi lượt tạo mới/cập nhật/xóa dữ liệu trên toàn hệ thống — ai làm, lúc nào, module nào
 - **Đăng nhập & phân quyền cơ bản**: 4 vai trò — Quản trị viên, Nhân viên bán hàng, Kế toán, Thủ kho — mỗi vai trò chỉ thấy menu phù hợp. Mật khẩu được mã hóa (bcrypt), tài khoản tự khóa 15 phút sau 5 lần đăng nhập sai.
 - **Sao lưu & Phục hồi**: xuất toàn bộ dữ liệu ra 1 file `.json`, phục hồi lại khi cần (có xác nhận trước khi ghi đè)

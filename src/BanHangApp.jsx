@@ -724,7 +724,7 @@ function ProductsPage({ store, warehouses }) {
       )}
       {editing && (
         <Modal title={editing.id ? "Sửa hàng hóa" : "Thêm hàng hóa"} onClose={() => setEditing(null)}>
-          <ProductForm initial={editing} warehouses={warehouses} onCancel={() => setEditing(null)} onSave={save} />
+          <ProductForm initial={editing} warehouses={warehouses} allProducts={items} onCancel={() => setEditing(null)} onSave={save} />
         </Modal>
       )}
       {toDelete && (
@@ -734,7 +734,7 @@ function ProductsPage({ store, warehouses }) {
   );
 }
 
-function ProductForm({ initial, warehouses, onSave, onCancel }) {
+function ProductForm({ initial, warehouses, allProducts, onSave, onCancel }) {
   const [f, setF] = useState({
     ma: initial.ma || "",
     ten: initial.ten || "",
@@ -750,6 +750,7 @@ function ProductForm({ initial, warehouses, onSave, onCancel }) {
   const [donViQuyDoi, setDonViQuyDoi] = useState(initial.don_vi_quy_doi || []);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [tonKhoTheoKho, setTonKhoTheoKho] = useState(initial.ton_kho_theo_kho || {});
+  const [error, setError] = useState("");
   const useWarehouseBreakdown = warehouses && warehouses.length > 1;
 
   function addUnit() { setDonViQuyDoi((cur) => [...cur, { ten: "", ty_le: 1 }]); }
@@ -758,6 +759,16 @@ function ProductForm({ initial, warehouses, onSave, onCancel }) {
 
   function submit(e) {
     e.preventDefault();
+    const others = (allProducts || []).filter((p) => p.id !== f.id);
+    const maTrim = f.ma.trim();
+    const vachTrim = f.ma_vach.trim();
+    const dupMa = others.find((p) => p.ma?.trim().toLowerCase() === maTrim.toLowerCase());
+    if (dupMa) { setError(`Mã hàng "${maTrim}" đã được dùng cho "${dupMa.ten}" — vui lòng đặt mã khác.`); return; }
+    if (vachTrim) {
+      const dupVach = others.find((p) => p.ma_vach?.trim() === vachTrim);
+      if (dupVach) { setError(`Mã vạch "${vachTrim}" đã được dùng cho "${dupVach.ten}" — vui lòng kiểm tra lại.`); return; }
+    }
+    setError("");
     const payload = { ...f, don_vi_quy_doi: donViQuyDoi.filter((u) => u.ten && u.ty_le > 0) };
     if (useWarehouseBreakdown) {
       payload.ton_kho_theo_kho = tonKhoTheoKho;
@@ -821,6 +832,12 @@ function ProductForm({ initial, warehouses, onSave, onCancel }) {
       <button type="button" onClick={addUnit} className="mb-3 text-[12.5px] font-medium flex items-center gap-1" style={{ color: COLORS.navy }}>
         <Plus size={13} /> Thêm đơn vị quy đổi
       </button>
+
+      {error && (
+        <div className="mb-3 px-3 py-2 rounded-md text-[12.5px] flex items-start gap-2" style={{ background: COLORS.redBg, color: COLORS.red }}>
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
 
       <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
         <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
@@ -2770,38 +2787,51 @@ function StockPage({ products, warehouses }) {
 /* ------------------------------------------------------------------ */
 /* Nhập - Xuất - Tồn chi tiết                                          */
 /* ------------------------------------------------------------------ */
-function NXTPage({ products, sales, purchases, salereturns, purchasereturns, vouchers }) {
+function NXTPage({ products, sales, purchases, salereturns, purchasereturns, vouchers, warehouses }) {
   const todayM = monthKey(todayStr());
   const [tuNgay, setTuNgay] = useState(`${todayM}-01`);
   const [denNgay, setDenNgay] = useState(todayStr());
+  const [khoId, setKhoId] = useState("all");
   const [query, setQuery] = useState("");
   const [detailProduct, setDetailProduct] = useState(null);
 
   const movements = useMemo(() => {
     const list = [];
-    sales.forEach((inv) => inv.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: inv.ngay, delta: -it.so_luong, doc: inv.ma, loai: "Bán hàng" })));
-    purchases.forEach((inv) => inv.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: inv.ngay, delta: it.so_luong, doc: inv.ma, loai: "Mua hàng" })));
-    (salereturns || []).forEach((r) => r.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: r.ngay, delta: it.so_luong, doc: r.ma, loai: "Trả hàng bán" })));
-    (purchasereturns || []).forEach((r) => r.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: r.ngay, delta: -it.so_luong, doc: r.ma, loai: "Trả hàng mua" })));
-    (vouchers || []).forEach((v) => list.push({ productId: v.hang_hoa_id, ngay: v.ngay, delta: v.loai === "in" ? v.so_luong : -v.so_luong, doc: v.ma, loai: v.loai === "in" ? "Nhập kho" : "Xuất kho" }));
+    sales.forEach((inv) => inv.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: inv.ngay, delta: -it.so_luong, doc: inv.ma, loai: "Bán hàng", khoId: inv.kho_id })));
+    purchases.forEach((inv) => inv.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: inv.ngay, delta: it.so_luong, doc: inv.ma, loai: "Mua hàng", khoId: inv.kho_id })));
+    (salereturns || []).forEach((r) => r.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: r.ngay, delta: it.so_luong, doc: r.ma, loai: "Trả hàng bán", khoId: r.kho_id })));
+    (purchasereturns || []).forEach((r) => r.items.forEach((it) => list.push({ productId: it.hang_hoa_id, ngay: r.ngay, delta: -it.so_luong, doc: r.ma, loai: "Trả hàng mua", khoId: r.kho_id })));
+    (vouchers || []).forEach((v) => {
+      if (v.loai === "in") list.push({ productId: v.hang_hoa_id, ngay: v.ngay, delta: v.so_luong, doc: v.ma, loai: "Nhập kho", khoId: v.kho_id });
+      else if (v.loai === "out") list.push({ productId: v.hang_hoa_id, ngay: v.ngay, delta: -v.so_luong, doc: v.ma, loai: "Xuất kho", khoId: v.kho_id });
+      else if (v.loai === "transfer") {
+        list.push({ productId: v.hang_hoa_id, ngay: v.ngay, delta: -v.so_luong, doc: v.ma, loai: "Chuyển kho (xuất)", khoId: v.tu_kho_id, isTransfer: true });
+        list.push({ productId: v.hang_hoa_id, ngay: v.ngay, delta: v.so_luong, doc: v.ma, loai: "Chuyển kho (nhập)", khoId: v.den_kho_id, isTransfer: true });
+      }
+    });
     return list;
   }, [sales, purchases, salereturns, purchasereturns, vouchers]);
 
+  const filteredMovements = useMemo(
+    () => movements.filter((m) => (khoId === "all" ? !m.isTransfer : m.khoId === khoId)),
+    [movements, khoId]
+  );
+
   const movesByProduct = useMemo(() => {
     const map = {};
-    movements.forEach((m) => {
+    filteredMovements.forEach((m) => {
       (map[m.productId] = map[m.productId] || []).push(m);
     });
     Object.values(map).forEach((arr) => arr.sort((a, b) => (a.ngay || "").localeCompare(b.ngay || "")));
     return map;
-  }, [movements]);
+  }, [filteredMovements]);
 
   const summary = useMemo(() => {
     return products
       .filter((p) => !query || p.ten?.toLowerCase().includes(query.toLowerCase()) || p.ma?.toLowerCase().includes(query.toLowerCase()))
       .map((p) => {
         const moves = movesByProduct[p.id] || [];
-        const current = p.ton_kho || 0;
+        const current = khoId === "all" ? (p.ton_kho || 0) : (p.ton_kho_theo_kho?.[khoId] || 0);
         const afterEnd = moves.filter((m) => (m.ngay || "") > denNgay).reduce((s, m) => s + m.delta, 0);
         const closing = current - afterEnd;
         const inPeriod = moves.filter((m) => (m.ngay || "") >= tuNgay && (m.ngay || "") <= denNgay);
@@ -2810,7 +2840,7 @@ function NXTPage({ products, sales, purchases, salereturns, purchasereturns, vou
         const xuat = inPeriod.filter((m) => m.delta < 0).reduce((s, m) => s - m.delta, 0);
         return { ...p, opening, nhap, xuat, closing };
       });
-  }, [products, movesByProduct, tuNgay, denNgay, query]);
+  }, [products, movesByProduct, tuNgay, denNgay, query, khoId]);
 
   const detailRows = useMemo(() => {
     if (!detailProduct) return [];
@@ -2837,6 +2867,14 @@ function NXTPage({ products, sales, purchases, salereturns, purchasereturns, vou
     <div>
       <PageHeader title="Nhập - Xuất - Tồn" subtitle="Sổ kho theo kỳ: tồn đầu kỳ + nhập − xuất = tồn cuối kỳ" action={<ExcelButton onClick={doExport} />} />
       <div className="flex flex-col sm:flex-row sm:items-end gap-2.5 mb-4">
+        {warehouses?.length > 1 && (
+          <Field label="Kho / Chi nhánh">
+            <select className={inputCls} style={{ ...inputStyle, minWidth: 150 }} value={khoId} onChange={(e) => setKhoId(e.target.value)}>
+              <option value="all">Tất cả các kho</option>
+              {warehouses.map((w) => <option key={w.id} value={w.id}>{w.ten}</option>)}
+            </select>
+          </Field>
+        )}
         <Field label="Từ ngày"><input type="date" className={inputCls} style={inputStyle} value={tuNgay} onChange={(e) => setTuNgay(e.target.value)} /></Field>
         <Field label="Đến ngày"><input type="date" className={inputCls} style={inputStyle} value={denNgay} onChange={(e) => setDenNgay(e.target.value)} /></Field>
       </div>
@@ -3245,10 +3283,16 @@ function Dashboard({ products, customers, suppliers, sales, purchases, receipts,
   );
 }
 
-function ReportsPage({ sales, purchases, products, channels }) {
+function ReportsPage({ sales, purchases, products, channels, warehouses }) {
+  const [khoId, setKhoId] = useState("all");
+  const filteredSales = useMemo(
+    () => (khoId === "all" ? sales : sales.filter((s) => s.kho_id === khoId)),
+    [sales, khoId]
+  );
+
   const monthly = useMemo(() => {
     const map = {};
-    sales.forEach((s) => {
+    filteredSales.forEach((s) => {
       const k = monthKey(s.ngay);
       if (!k) return;
       map[k] = map[k] || { name: k, doanhThu: 0, giaVon: 0 };
@@ -3259,31 +3303,31 @@ function ReportsPage({ sales, purchases, products, channels }) {
       }, 0);
     });
     return Object.values(map).sort((a, b) => a.name.localeCompare(b.name));
-  }, [sales, products]);
+  }, [filteredSales, products]);
 
   const topProducts = useMemo(() => {
     const map = {};
-    sales.forEach((s) => s.items.forEach((it) => {
+    filteredSales.forEach((s) => s.items.forEach((it) => {
       map[it.hang_hoa_id] = map[it.hang_hoa_id] || { ten: it.ten, sl: 0, doanhThu: 0 };
       map[it.hang_hoa_id].sl += it.so_luong;
       map[it.hang_hoa_id].doanhThu += it.so_luong * it.don_gia;
     }));
     return Object.values(map).sort((a, b) => b.doanhThu - a.doanhThu).slice(0, 8);
-  }, [sales]);
+  }, [filteredSales]);
 
   const byChannel = useMemo(() => {
     if (!channels || channels.length === 0) return [];
     const map = {};
-    sales.forEach((s) => {
+    filteredSales.forEach((s) => {
       const key = s.kenh_id || "__none";
       map[key] = map[key] || { ten: channels.find((c) => c.id === s.kenh_id)?.ten || "Chưa gán kênh", doanhThu: 0, soDon: 0 };
       map[key].doanhThu += s.tong_tien;
       map[key].soDon += 1;
     });
     return Object.values(map).sort((a, b) => b.doanhThu - a.doanhThu);
-  }, [sales, channels]);
+  }, [filteredSales, channels]);
 
-  const totalRevenue = sales.reduce((s, i) => s + i.tong_tien, 0);
+  const totalRevenue = filteredSales.reduce((s, i) => s + i.tong_tien, 0);
   const totalCost = monthly.reduce((s, m) => s + m.giaVon, 0);
   const profit = totalRevenue - totalCost;
 
@@ -3297,7 +3341,21 @@ function ReportsPage({ sales, purchases, products, channels }) {
 
   return (
     <div>
-      <PageHeader title="Báo cáo" subtitle="Doanh thu, lợi nhuận và hàng bán chạy" action={<ExcelButton onClick={doExport} />} />
+      <PageHeader
+        title="Báo cáo"
+        subtitle="Doanh thu, lợi nhuận và hàng bán chạy"
+        action={
+          <div className="flex items-center gap-2">
+            {warehouses?.length > 1 && (
+              <select className={inputCls} style={{ ...inputStyle, minWidth: 150 }} value={khoId} onChange={(e) => setKhoId(e.target.value)}>
+                <option value="all">Tất cả các kho</option>
+                {warehouses.map((w) => <option key={w.id} value={w.id}>{w.ten}</option>)}
+              </select>
+            )}
+            <ExcelButton onClick={doExport} />
+          </div>
+        }
+      />
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
         <StatCard icon={TrendingUp} label="Tổng doanh thu" value={fmtVND(totalRevenue)} tone="green" />
         <StatCard icon={ShoppingBag} label="Tổng giá vốn" value={fmtVND(totalCost)} tone="navy" />
@@ -4345,8 +4403,8 @@ export default function App() {
       />
     ),
     stock: <StockPage products={productStore.items} warehouses={warehouseStore.items} />,
-    nxt: <NXTPage products={productStore.items} sales={salesStore.items} purchases={purchaseStore.items} salereturns={saleReturnStore.items} purchasereturns={purchaseReturnStore.items} vouchers={voucherStore.items} />,
-    reports: <ReportsPage sales={salesStore.items} purchases={purchaseStore.items} products={productStore.items} channels={channelStore.items} />,
+    nxt: <NXTPage products={productStore.items} sales={salesStore.items} purchases={purchaseStore.items} salereturns={saleReturnStore.items} purchasereturns={purchaseReturnStore.items} vouchers={voucherStore.items} warehouses={warehouseStore.items} />,
+    reports: <ReportsPage sales={salesStore.items} purchases={purchaseStore.items} products={productStore.items} channels={channelStore.items} warehouses={warehouseStore.items} />,
     taxreport: <TaxReportPage sales={salesStore.items} purchases={purchaseStore.items} products={productStore.items} />,
     employees: <EmployeesPage store={employeeStore} />,
     payroll: <PayrollPage employees={employeeStore.items} store={payrollStore} />,
