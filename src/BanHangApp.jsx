@@ -1311,12 +1311,168 @@ function ImportExcelModal({ title, columns, templateName, templateSample, valida
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* In tem mã vạch — dùng jsbarcode (tải theo yêu cầu) để vẽ mã vạch vào  */
+/* các thẻ <svg>, rồi in như một chứng từ bình thường.                  */
+/* ------------------------------------------------------------------ */
+const LABEL_PAPER = [
+  { key: "A4", label: "A4 — nhiều tem mỗi trang" },
+  { key: "ROLL", label: "Cuộn nhiệt 40×30mm" },
+];
+
+function BarcodeLabelModal({ products, initialProductId, onClose }) {
+  const [lines, setLines] = useState(
+    initialProductId ? [{ hang_hoa_id: initialProductId, so_luong: 1 }] : [{ hang_hoa_id: products[0]?.id || "", so_luong: 1 }]
+  );
+  const [paper, setPaper] = useState("A4");
+  const [printJob, setPrintJob] = useState(null);
+
+  function updateLine(i, patch) {
+    setLines(lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  }
+  function addLine() {
+    setLines([...lines, { hang_hoa_id: "", so_luong: 1 }]);
+  }
+  function removeLine(i) {
+    setLines(lines.filter((_, idx) => idx !== i));
+  }
+
+  const totalLabels = lines.reduce((s, l) => s + (Number(l.so_luong) || 0), 0);
+
+  function buildAndPrint() {
+    const labels = [];
+    lines.forEach((l) => {
+      const p = products.find((x) => x.id === l.hang_hoa_id);
+      if (!p) return;
+      const qty = Math.max(0, Number(l.so_luong) || 0);
+      for (let i = 0; i < qty; i++) {
+        labels.push({ ten: p.ten, gia_ban: p.gia_ban, code: p.ma_vach || p.ma });
+      }
+    });
+    if (labels.length === 0) return;
+    setPrintJob({ labels, paper });
+  }
+
+  if (printJob) {
+    return <BarcodePrintView job={printJob} onClose={() => { setPrintJob(null); onClose(); }} />;
+  }
+
+  return (
+    <Modal title="In tem mã vạch" onClose={onClose} width="max-w-2xl">
+      <div className="space-y-2 mb-3">
+        {lines.map((l, i) => (
+          <div key={i} className="flex items-center gap-1.5">
+            <select className={inputCls} style={{ ...inputStyle, flex: 1 }} value={l.hang_hoa_id} onChange={(e) => updateLine(i, { hang_hoa_id: e.target.value })}>
+              <option value="">-- Chọn hàng hóa --</option>
+              {products.map((p) => <option key={p.id} value={p.id}>{p.ten} {p.ma_vach ? `(${p.ma_vach})` : `(${p.ma})`}</option>)}
+            </select>
+            <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 90 }} value={l.so_luong} onChange={(e) => updateLine(i, { so_luong: e.target.value })} />
+            {lines.length > 1 && (
+              <button type="button" onClick={() => removeLine(i)} className="p-1.5 rounded hover:bg-slate-100 shrink-0" aria-label="Bỏ dòng này">
+                <X size={14} color={COLORS.red} />
+              </button>
+            )}
+          </div>
+        ))}
+        <button type="button" onClick={addLine} className="text-[12px] font-medium underline" style={{ color: COLORS.navy }}>+ Thêm hàng hóa</button>
+      </div>
+      <Field label="Khổ giấy">
+        <select className={inputCls} style={inputStyle} value={paper} onChange={(e) => setPaper(e.target.value)}>
+          {LABEL_PAPER.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </select>
+      </Field>
+      <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+        <Btn type="button" variant="outline" onClick={onClose}>Hủy</Btn>
+        <Btn onClick={buildAndPrint} disabled={totalLabels === 0}>In {totalLabels} tem</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function BarcodePrintView({ job, onClose }) {
+  const { labels, paper } = job;
+  const svgRefs = useRef([]);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    import("jsbarcode").then((mod) => {
+      if (!alive) return;
+      const JsBarcode = mod.default || mod;
+      svgRefs.current.forEach((el, i) => {
+        if (!el || !labels[i]) return;
+        try {
+          JsBarcode(el, labels[i].code || "000000", {
+            format: "CODE128",
+            displayValue: true,
+            fontSize: paper === "ROLL" ? 11 : 10,
+            height: paper === "ROLL" ? 34 : 28,
+            width: paper === "ROLL" ? 1.8 : 1.4,
+            margin: 0,
+          });
+        } catch {
+          // mã trống hoặc ký tự không hợp lệ — bỏ qua, ô tem sẽ trống phần mã vạch
+        }
+      });
+      setReady(true);
+    });
+    return () => { alive = false; };
+  }, [labels, paper]);
+
+  useEffect(() => {
+    function onKey(e) { if (e.key === "Escape") onClose?.(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const isRoll = paper === "ROLL";
+
+  return (
+    <div id="ntcons-barcode-print">
+      <style>{`
+        ${isRoll ? "@page { size: 40mm 30mm; margin: 1mm; }" : "@page { size: A4 portrait; margin: 8mm; }"}
+        @media print {
+          body * { visibility: hidden; }
+          #ntcons-barcode-print, #ntcons-barcode-print * { visibility: visible; }
+          #ntcons-barcode-print { position: absolute; top: 0; left: 0; width: 100%; }
+          .no-print { display: none !important; }
+        }
+      `}</style>
+      <div className="fixed inset-0 z-[100] overflow-y-auto py-6 px-3" style={{ background: "#F1EEE7" }}>
+        <div className="no-print flex items-center justify-center gap-2 mb-4">
+          <button onClick={() => window.print()} disabled={!ready} className="px-3 py-1.5 rounded-md text-[13px] font-medium inline-flex items-center gap-1.5 disabled:opacity-50" style={{ background: COLORS.navy, color: "#fff" }}>
+            <Printer size={14} /> {ready ? "In tem" : "Đang dựng mã vạch..."}
+          </button>
+          <button onClick={onClose} className="px-3 py-1.5 rounded-md text-[13px] font-medium bg-white border" style={{ borderColor: COLORS.border, color: COLORS.text }}>Đóng (Esc)</button>
+        </div>
+        <div
+          className={isRoll ? "flex flex-col gap-2 mx-auto" : "grid gap-2 mx-auto"}
+          style={isRoll ? { width: 200 } : { gridTemplateColumns: "repeat(3, 1fr)", maxWidth: 760 }}
+        >
+          {labels.map((l, i) => (
+            <div
+              key={i}
+              className="bg-white flex flex-col items-center justify-center text-center overflow-hidden"
+              style={{ border: "1px solid #ccc", padding: isRoll ? 4 : 6, minHeight: isRoll ? 110 : 90 }}
+            >
+              <div className="text-[11px] font-medium leading-tight line-clamp-2" style={{ color: "#1a1a1a" }}>{l.ten}</div>
+              <svg ref={(el) => (svgRefs.current[i] = el)} />
+              <div className="text-[11px] font-semibold" style={{ color: "#1a1a1a" }}>{fmtVND(l.gia_ban)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProductsPage({ store, warehouses }) {
   const { items, add, update, remove, persist } = store;
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState(null); // null | {} | row
   const [toDelete, setToDelete] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [labeling, setLabeling] = useState(null); // null | { productId } | true (danh sách trống)
 
   const q = query.trim().toLowerCase();
   const filtered = items.filter(
@@ -1374,6 +1530,7 @@ function ProductsPage({ store, warehouses }) {
         subtitle={`${items.length} mặt hàng`}
         action={
           <div className="flex items-center gap-2">
+            <Btn variant="outline" onClick={() => setLabeling({})}><Tag size={14} /> In tem mã vạch</Btn>
             <Btn variant="outline" onClick={() => setImporting(true)}><Upload size={14} /> Nhập từ Excel</Btn>
             <Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm hàng hóa</Btn>
           </div>
@@ -1405,6 +1562,7 @@ function ProductsPage({ store, warehouses }) {
           rows={filtered}
           onEdit={setEditing}
           onDelete={setToDelete}
+          onPrint={(r) => setLabeling({ productId: r.id })}
         />
       )}
       {editing && (
@@ -1426,6 +1584,9 @@ function ProductsPage({ store, warehouses }) {
           onClose={() => setImporting(false)}
           onImport={doImport}
         />
+      )}
+      {labeling && (
+        <BarcodeLabelModal products={items} initialProductId={labeling.productId} onClose={() => setLabeling(null)} />
       )}
     </div>
   );
