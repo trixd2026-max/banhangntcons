@@ -10,11 +10,6 @@ import {
   Building2, CheckCircle2, ChevronLeft, ChevronsUpDown, ChevronUp, ChevronDown, Loader2,
   ArrowUpRight, ArrowDownRight, CalendarDays
 } from "lucide-react";
-import {
-  ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  BarChart, Bar, Legend
-} from "recharts";
-import * as XLSX from "xlsx";
 import bcrypt from "bcryptjs";
 
 /* ------------------------------------------------------------------ */
@@ -120,8 +115,12 @@ function docTienBangChu(amount) {
 }
 
 /* Export one or more tables to a single .xlsx file, downloaded via the browser. */
-function exportExcel(filename, sheets) {
+/* xlsx chỉ ~700KB nhưng chỉ dùng khi xuất Excel — tải theo yêu cầu thay vì
+   gộp vào gói chính, giúp màn hình đăng nhập và các trang không xuất Excel
+   tải nhanh hơn. */
+async function exportExcel(filename, sheets) {
   try {
+    const XLSX = await import("xlsx");
     const wb = XLSX.utils.book_new();
     sheets.forEach(({ name, rows }) => {
       const ws = XLSX.utils.json_to_sheet(rows);
@@ -130,6 +129,7 @@ function exportExcel(filename, sheets) {
     XLSX.writeFile(wb, filename.endsWith(".xlsx") ? filename : filename + ".xlsx");
   } catch (e) {
     console.error("export excel failed", e);
+    toast("Không xuất được file Excel.", "error");
   }
 }
 
@@ -139,6 +139,29 @@ function ExcelButton({ onClick, label = "Xuất Excel" }) {
       <FileSpreadsheet size={13.5} /> {label}
     </Btn>
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* Recharts — thư viện biểu đồ khá nặng, chỉ dùng ở Bảng điều khiển và  */
+/* Báo cáo, nên tải theo yêu cầu (dynamic import) thay vì gộp sẵn.      */
+/* ------------------------------------------------------------------ */
+let RECHARTS_CACHE = null;
+function useRecharts() {
+  const [mod, setMod] = useState(RECHARTS_CACHE);
+  useEffect(() => {
+    if (RECHARTS_CACHE) { setMod(RECHARTS_CACHE); return; }
+    let alive = true;
+    import("recharts").then((m) => {
+      RECHARTS_CACHE = m;
+      if (alive) setMod(m);
+    });
+    return () => { alive = false; };
+  }, []);
+  return mod;
+}
+
+function ChartSkeleton({ height = 220 }) {
+  return <div className="rounded-md animate-pulse" style={{ height, background: COLORS.bg }} />;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1044,11 +1067,140 @@ function Table({
 /* ------------------------------------------------------------------ */
 /* Danh mục: Products / Customers / Suppliers (generic CRUD)           */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Nhập liệu hàng loạt từ Excel — dùng chung cho Hàng hóa, Khách hàng,  */
+/* Nhà cung cấp. Đọc file, ánh xạ theo tên cột tiếng Việt, xem trước,   */
+/* báo lỗi từng dòng (thiếu dữ liệu / trùng mã), rồi ghi một lần.       */
+/* ------------------------------------------------------------------ */
+/**
+ * @param {Object} cfg
+ * @param {string} cfg.title
+ * @param {{ header: string, key: string, required?: boolean, type?: "number" }[]} cfg.columns
+ * @param {string} cfg.templateName
+ * @param {any[]} cfg.templateSample - 1 dòng mẫu cho file tải về
+ * @param {(row:any)=>string|null} cfg.validateRow - trả về thông báo lỗi hoặc null
+ * @param {(row:any)=>Object} cfg.toRecord - map dòng đã đọc thành bản ghi lưu trữ
+ * @param {()=>void} cfg.onClose
+ * @param {(rows:Object[])=>void} cfg.onImport - nhận danh sách bản ghi hợp lệ
+ */
+function ImportExcelModal({ title, columns, templateName, templateSample, validateRow, toRecord, onClose, onImport }) {
+  const [rows, setRows] = useState(null); // null = chưa chọn file
+  const [fileName, setFileName] = useState("");
+  const [parsing, setParsing] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const fileInputRef = useRef(null);
+
+  async function downloadTemplate() {
+    const XLSX = await import("xlsx");
+    const ws = XLSX.utils.json_to_sheet([templateSample]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Mẫu nhập liệu");
+    XLSX.writeFile(wb, `${templateName}.xlsx`);
+  }
+
+  async function onFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setParsing(true);
+    try {
+      const XLSX = await import("xlsx");
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const parsed = raw.map((r, idx) => {
+        const record = {};
+        columns.forEach((c) => {
+          let v = r[c.header];
+          if (v === undefined) {
+            // thử khớp không phân biệt hoa thường / khoảng trắng nếu tên cột lệch nhẹ
+            const foundKey = Object.keys(r).find((k) => k.trim().toLowerCase() === c.header.trim().toLowerCase());
+            v = foundKey ? r[foundKey] : "";
+          }
+          if (c.type === "number") v = v === "" ? 0 : Number(v) || 0;
+          else v = String(v ?? "").trim();
+          record[c.key] = v;
+        });
+        const err = validateRow(record, idx);
+        return { ...record, __row: idx + 2, __error: err }; // +2: dòng 1 là tiêu đề trong Excel
+      });
+      setRows(parsed);
+    } catch (err) {
+      console.error(err);
+      toast("Không đọc được file — kiểm tra định dạng .xlsx/.csv và thử lại.", "error");
+      setRows(null);
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  const validRows = (rows || []).filter((r) => !r.__error);
+  const invalidRows = (rows || []).filter((r) => r.__error);
+
+  async function doImport() {
+    if (validRows.length === 0) return;
+    setImportBusy(true);
+    try {
+      await onImport(validRows.map(toRecord));
+      onClose();
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={title} onClose={onClose} width="max-w-3xl">
+      {!rows ? (
+        <div>
+          <div className="rounded-md p-3 mb-3 text-[12.5px]" style={{ background: COLORS.bg, color: COLORS.textMuted }}>
+            Tải file mẫu, điền dữ liệu theo đúng tên cột, rồi tải file lên. Các cột bắt buộc: {columns.filter((c) => c.required).map((c) => c.header).join(", ")}.
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            <Btn variant="outline" onClick={downloadTemplate}><FileSpreadsheet size={14} /> Tải file mẫu</Btn>
+            <Btn variant="outline" onClick={() => fileInputRef.current?.click()} busy={parsing}><Upload size={14} /> Chọn file Excel/CSV</Btn>
+            <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={onFile} />
+            {fileName && <span className="text-[12px]" style={{ color: COLORS.textMuted }}>{fileName}</span>}
+          </div>
+          <div className="flex justify-end gap-2 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+            <Btn type="button" variant="outline" onClick={onClose}>Hủy</Btn>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div className="flex items-center gap-3 mb-3 text-[12.5px]">
+            <span style={{ color: COLORS.green }}>{validRows.length} dòng hợp lệ</span>
+            {invalidRows.length > 0 && <span style={{ color: COLORS.red }}>{invalidRows.length} dòng lỗi (sẽ bỏ qua)</span>}
+            <button onClick={() => { setRows(null); setFileName(""); }} className="ml-auto text-[12px] underline" style={{ color: COLORS.textMuted }}>Chọn file khác</button>
+          </div>
+          <div className="rounded-md border overflow-hidden mb-3" style={{ borderColor: COLORS.border }}>
+            <Table
+              columns={[
+                { key: "__row", label: "Dòng", align: "right", sortable: false },
+                ...columns.map((c) => ({ key: c.key, label: c.header, sortable: false })),
+                { key: "__error", label: "Trạng thái", sortable: false, render: (r) => (r.__error ? <span style={{ color: COLORS.red }}>{r.__error}</span> : <span style={{ color: COLORS.green }}>Hợp lệ</span>) },
+              ]}
+              rows={rows}
+              rowKey="__row"
+              pageSize={20}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+            <Btn type="button" variant="outline" onClick={onClose}>Hủy</Btn>
+            <Btn onClick={doImport} busy={importBusy} disabled={validRows.length === 0}>Nhập {validRows.length} dòng hợp lệ</Btn>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function ProductsPage({ store, warehouses }) {
-  const { items, add, update, remove } = store;
+  const { items, add, update, remove, persist } = store;
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState(null); // null | {} | row
   const [toDelete, setToDelete] = useState(null);
+  const [importing, setImporting] = useState(false);
 
   const q = query.trim().toLowerCase();
   const filtered = items.filter(
@@ -1065,12 +1217,51 @@ function ProductsPage({ store, warehouses }) {
     setEditing(null);
   }
 
+  const importColumns = [
+    { header: "Mã hàng", key: "ma", required: true },
+    { header: "Tên hàng", key: "ten", required: true },
+    { header: "Mã vạch", key: "ma_vach" },
+    { header: "ĐVT", key: "dvt" },
+    { header: "Giá vốn", key: "gia_von", type: "number" },
+    { header: "Giá bán", key: "gia_ban", type: "number" },
+    { header: "Tồn kho", key: "ton_kho", type: "number" },
+    { header: "Tồn tối thiểu", key: "ton_toi_thieu", type: "number" },
+    { header: "Thuế suất VAT (%)", key: "thue_suat_vat", type: "number" },
+  ];
+
+  function validateImportRow(r) {
+    if (!r.ma) return "Thiếu mã hàng";
+    if (!r.ten) return "Thiếu tên hàng";
+    const dupExisting = items.find((p) => p.ma?.trim().toLowerCase() === r.ma.toLowerCase());
+    if (dupExisting) return `Mã "${r.ma}" đã tồn tại (${dupExisting.ten})`;
+    return null;
+  }
+
+  function doImport(records) {
+    // Trong file có thể có nhiều dòng cùng mã — chỉ giữ dòng đầu, các dòng sau coi như trùng trong-file.
+    const seen = new Set();
+    const toAdd = [];
+    for (const r of records) {
+      const key = r.ma.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      toAdd.push({ ...r, id: uid("SP"), dvt: r.dvt || "Cái", thue_suat_vat: r.thue_suat_vat || 0 });
+    }
+    persist([...items, ...toAdd], "create", { silent: true });
+    toast(`Đã nhập ${toAdd.length} hàng hóa từ Excel.`);
+  }
+
   return (
     <div>
       <PageHeader
         title="Hàng hóa"
         subtitle={`${items.length} mặt hàng`}
-        action={<Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm hàng hóa</Btn>}
+        action={
+          <div className="flex items-center gap-2">
+            <Btn variant="outline" onClick={() => setImporting(true)}><Upload size={14} /> Nhập từ Excel</Btn>
+            <Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm hàng hóa</Btn>
+          </div>
+        }
       />
       <Toolbar query={query} setQuery={setQuery} placeholder="Tìm theo mã, tên hoặc mã vạch..." />
       {items.length === 0 ? (
@@ -1107,6 +1298,18 @@ function ProductsPage({ store, warehouses }) {
       )}
       {toDelete && (
         <ConfirmBar text={`Xóa hàng hóa "${toDelete.ten}"?`} onConfirm={() => { remove(toDelete.id); setToDelete(null); }} onCancel={() => setToDelete(null)} />
+      )}
+      {importing && (
+        <ImportExcelModal
+          title="Nhập hàng hóa từ Excel"
+          columns={importColumns}
+          templateName="mau-nhap-hang-hoa"
+          templateSample={{ "Mã hàng": "SP001", "Tên hàng": "Xi măng bao 50kg", "Mã vạch": "8938501234567", "ĐVT": "Bao", "Giá vốn": 100000, "Giá bán": 130000, "Tồn kho": 0, "Tồn tối thiểu": 5, "Thuế suất VAT (%)": 10 }}
+          validateRow={validateImportRow}
+          toRecord={(r) => r}
+          onClose={() => setImporting(false)}
+          onImport={doImport}
+        />
       )}
     </div>
   );
@@ -1233,10 +1436,11 @@ function ProductForm({ initial, warehouses, allProducts, onSave, onCancel }) {
 
 function PartnerPage({ store, kind, priceLists }) {
   // kind: 'customer' | 'supplier'
-  const { items, add, update, remove } = store;
+  const { items, add, update, remove, persist } = store;
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState(null);
   const [toDelete, setToDelete] = useState(null);
+  const [importing, setImporting] = useState(false);
   const label = kind === "customer" ? "khách hàng" : "nhà cung cấp";
   const prefix = kind === "customer" ? "KH" : "NCC";
   const priceListName = (id) => (priceLists || []).find((p) => p.id === id)?.ten;
@@ -1257,12 +1461,37 @@ function PartnerPage({ store, kind, priceLists }) {
     setEditing(null);
   }
 
+  const importColumns = [
+    { header: "Tên", key: "ten", required: true },
+    { header: "Điện thoại", key: "dien_thoai" },
+    { header: "Địa chỉ", key: "dia_chi" },
+    { header: "Mã số thuế", key: "ma_so_thue" },
+    { header: "Nợ đầu kỳ", key: "no_dau", type: "number" },
+    ...(kind === "customer" ? [{ header: "Hạn mức công nợ", key: "han_muc_cong_no", type: "number" }] : []),
+  ];
+
+  function validateImportRow(r) {
+    if (!r.ten) return "Thiếu tên";
+    return null;
+  }
+
+  function doImport(records) {
+    const toAdd = records.map((r) => ({ ...r, id: uid(prefix) }));
+    persist([...items, ...toAdd], "create", { silent: true });
+    toast(`Đã nhập ${toAdd.length} ${label} từ Excel.`);
+  }
+
   return (
     <div>
       <PageHeader
         title={kind === "customer" ? "Khách hàng" : "Nhà cung cấp"}
         subtitle={`${items.length} ${label}`}
-        action={<Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm {label}</Btn>}
+        action={
+          <div className="flex items-center gap-2">
+            <Btn variant="outline" onClick={() => setImporting(true)}><Upload size={14} /> Nhập từ Excel</Btn>
+            <Btn onClick={() => setEditing({})}><Plus size={15} /> Thêm {label}</Btn>
+          </div>
+        }
       />
       <Toolbar query={query} setQuery={setQuery} placeholder={`Tìm tên, SĐT, địa chỉ hoặc MST ${label}...`} />
       {items.length === 0 ? (
@@ -1292,6 +1521,25 @@ function PartnerPage({ store, kind, priceLists }) {
       )}
       {toDelete && (
         <ConfirmBar text={`Xóa "${toDelete.ten}"?`} onConfirm={() => { remove(toDelete.id); setToDelete(null); }} onCancel={() => setToDelete(null)} />
+      )}
+      {importing && (
+        <ImportExcelModal
+          title={`Nhập ${label} từ Excel`}
+          columns={importColumns}
+          templateName={`mau-nhap-${kind === "customer" ? "khach-hang" : "nha-cung-cap"}`}
+          templateSample={{
+            "Tên": kind === "customer" ? "Nguyễn Văn A" : "Công ty TNHH ABC",
+            "Điện thoại": "0901234567",
+            "Địa chỉ": "123 Đường ABC, Quy Nhơn",
+            "Mã số thuế": "",
+            "Nợ đầu kỳ": 0,
+            ...(kind === "customer" ? { "Hạn mức công nợ": 0 } : {}),
+          }}
+          validateRow={validateImportRow}
+          toRecord={(r) => r}
+          onClose={() => setImporting(false)}
+          onImport={doImport}
+        />
       )}
     </div>
   );
@@ -4166,6 +4414,7 @@ function ChangeBadge({ pct }) {
 }
 
 function Dashboard({ products, customers, suppliers, sales, purchases, receipts, payments, salereturns }) {
+  const recharts = useRecharts();
   const [preset, setPreset] = useState("thisMonth");
   const [range, setRange] = useState(() => rangeForPreset("thisMonth"));
 
@@ -4260,15 +4509,19 @@ function Dashboard({ products, customers, suppliers, sales, purchases, receipts,
           <div className="text-[13.5px] font-semibold mb-3" style={{ color: COLORS.text }}>
             Doanh thu {spanDays <= 31 ? "theo ngày" : "theo tháng"} — {fmtDate(from)} đến {fmtDate(to)}
           </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
-              <XAxis dataKey="name" tick={{ fontSize: 11, fill: COLORS.textMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: COLORS.textMuted }} axisLine={false} tickLine={false} width={40} tickFormatter={(v) => (v >= 1000000 ? (v / 1000000).toFixed(0) + "tr" : v)} />
-              <Tooltip formatter={(v) => fmtVND(v)} contentStyle={{ fontSize: 12, borderRadius: 6, borderColor: COLORS.border }} />
-              <Bar dataKey="doanhThu" name="Doanh thu" fill={COLORS.navy} radius={[3, 3, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          {recharts ? (
+            <recharts.ResponsiveContainer width="100%" height={220}>
+              <recharts.BarChart data={chartData}>
+                <recharts.CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
+                <recharts.XAxis dataKey="name" tick={{ fontSize: 11, fill: COLORS.textMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
+                <recharts.YAxis tick={{ fontSize: 11, fill: COLORS.textMuted }} axisLine={false} tickLine={false} width={40} tickFormatter={(v) => (v >= 1000000 ? (v / 1000000).toFixed(0) + "tr" : v)} />
+                <recharts.Tooltip formatter={(v) => fmtVND(v)} contentStyle={{ fontSize: 12, borderRadius: 6, borderColor: COLORS.border }} />
+                <recharts.Bar dataKey="doanhThu" name="Doanh thu" fill={COLORS.navy} radius={[3, 3, 0, 0]} />
+              </recharts.BarChart>
+            </recharts.ResponsiveContainer>
+          ) : (
+            <ChartSkeleton height={220} />
+          )}
         </div>
 
         <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
@@ -4310,6 +4563,7 @@ function Dashboard({ products, customers, suppliers, sales, purchases, receipts,
 }
 
 function ReportsPage({ sales, purchases, products, channels, warehouses }) {
+  const recharts = useRecharts();
   const [khoId, setKhoId] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -4406,18 +4660,20 @@ function ReportsPage({ sales, purchases, products, channels, warehouses }) {
         <div className="text-[13.5px] font-semibold mb-3" style={{ color: COLORS.text }}>Doanh thu & giá vốn theo tháng</div>
         {monthly.length === 0 ? (
           <div className="text-[13px]" style={{ color: COLORS.textMuted }}>Chưa có dữ liệu bán hàng.</div>
+        ) : !recharts ? (
+          <ChartSkeleton height={240} />
         ) : (
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={monthly}>
-              <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
-              <XAxis dataKey="name" tick={{ fontSize: 11, fill: COLORS.textMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: COLORS.textMuted }} axisLine={false} tickLine={false} width={45} tickFormatter={(v) => (v >= 1000000 ? (v / 1000000).toFixed(0) + "tr" : v)} />
-              <Tooltip formatter={(v) => fmtVND(v)} contentStyle={{ fontSize: 12, borderRadius: 6, borderColor: COLORS.border }} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Line type="monotone" dataKey="doanhThu" name="Doanh thu" stroke={COLORS.green} strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="giaVon" name="Giá vốn" stroke={COLORS.red} strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+          <recharts.ResponsiveContainer width="100%" height={240}>
+            <recharts.LineChart data={monthly}>
+              <recharts.CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
+              <recharts.XAxis dataKey="name" tick={{ fontSize: 11, fill: COLORS.textMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
+              <recharts.YAxis tick={{ fontSize: 11, fill: COLORS.textMuted }} axisLine={false} tickLine={false} width={45} tickFormatter={(v) => (v >= 1000000 ? (v / 1000000).toFixed(0) + "tr" : v)} />
+              <recharts.Tooltip formatter={(v) => fmtVND(v)} contentStyle={{ fontSize: 12, borderRadius: 6, borderColor: COLORS.border }} />
+              <recharts.Legend wrapperStyle={{ fontSize: 12 }} />
+              <recharts.Line type="monotone" dataKey="doanhThu" name="Doanh thu" stroke={COLORS.green} strokeWidth={2} dot={false} />
+              <recharts.Line type="monotone" dataKey="giaVon" name="Giá vốn" stroke={COLORS.red} strokeWidth={2} dot={false} />
+            </recharts.LineChart>
+          </recharts.ResponsiveContainer>
         )}
       </div>
 
