@@ -7,7 +7,8 @@ import {
   Printer, LogOut, UserCog, ShieldCheck, Eye, EyeOff,
   Tag, ClipboardList, Contact, Banknote, Landmark, FileSpreadsheet, Store, Percent,
   CreditCard, BookOpen, Database, Bell, Upload, History, ScanLine,
-  Building2, CheckCircle2, ChevronLeft, ChevronsUpDown, ChevronUp, ChevronDown, Loader2
+  Building2, CheckCircle2, ChevronLeft, ChevronsUpDown, ChevronUp, ChevronDown, Loader2,
+  ArrowUpRight, ArrowDownRight, CalendarDays
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -4113,41 +4114,154 @@ function StatCard({ icon: Icon, label, value, tone = "navy", sub }) {
   );
 }
 
+const DASHBOARD_PRESETS = [
+  { key: "today", label: "Hôm nay" },
+  { key: "week", label: "Tuần này" },
+  { key: "thisMonth", label: "Tháng này" },
+  { key: "lastMonth", label: "Tháng trước" },
+];
+
+function rangeForPreset(preset) {
+  const today = new Date();
+  const iso = (d) => d.toISOString().slice(0, 10);
+  if (preset === "today") return { from: todayStr(), to: todayStr() };
+  if (preset === "week") {
+    const dow = today.getDay() || 7; // Thứ Hai = 1 ... Chủ Nhật = 7
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - dow + 1);
+    return { from: iso(monday), to: todayStr() };
+  }
+  if (preset === "lastMonth") {
+    const first = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const last = new Date(today.getFullYear(), today.getMonth(), 0);
+    return { from: iso(first), to: iso(last) };
+  }
+  // thisMonth (mặc định)
+  return { from: todayStr().slice(0, 7) + "-01", to: todayStr() };
+}
+
+/** Kỳ trước liền kề, có cùng độ dài ngày với kỳ đang chọn — dùng để so sánh tăng/giảm. */
+function previousRange(from, to) {
+  const DAY = 86400000;
+  const days = Math.floor((new Date(to) - new Date(from)) / DAY) + 1;
+  const prevTo = new Date(new Date(from).getTime() - DAY).toISOString().slice(0, 10);
+  const prevFrom = new Date(new Date(from).getTime() - days * DAY).toISOString().slice(0, 10);
+  return { from: prevFrom, to: prevTo };
+}
+
+function pctChange(cur, prev) {
+  if (!prev) return cur ? null : 0; // null = kỳ trước không có số liệu để so sánh
+  return ((cur - prev) / prev) * 100;
+}
+
+function ChangeBadge({ pct }) {
+  if (pct === null) return <span className="text-[11px]" style={{ color: COLORS.textMuted }}>Kỳ trước chưa có số liệu</span>;
+  const up = pct >= 0;
+  const Icon = up ? ArrowUpRight : ArrowDownRight;
+  return (
+    <span className="text-[11px] inline-flex items-center gap-0.5 font-medium" style={{ color: up ? COLORS.green : COLORS.red }}>
+      <Icon size={11} /> {Math.abs(pct).toFixed(1)}% so với kỳ trước
+    </span>
+  );
+}
+
 function Dashboard({ products, customers, suppliers, sales, purchases, receipts, payments, salereturns }) {
-  const thisMonth = monthKey(todayStr());
-  const revenueThisMonth = sales.filter((s) => monthKey(s.ngay) === thisMonth).reduce((s, i) => s + i.tong_tien, 0);
-  const purchaseThisMonth = purchases.filter((s) => monthKey(s.ngay) === thisMonth).reduce((s, i) => s + i.tong_tien, 0);
+  const [preset, setPreset] = useState("thisMonth");
+  const [range, setRange] = useState(() => rangeForPreset("thisMonth"));
+
+  function choosePreset(key) {
+    setPreset(key);
+    setRange(rangeForPreset(key));
+  }
+  function setCustomRange(patch) {
+    setPreset("custom");
+    setRange((cur) => ({ ...cur, ...patch }));
+  }
+
+  const { from, to } = range;
+  const prev = previousRange(from, to);
+  const inRange = (d) => d >= from && d <= to;
+  const inPrevRange = (d) => d >= prev.from && d <= prev.to;
+
+  const revenue = sales.filter((s) => inRange(s.ngay)).reduce((s, i) => s + i.tong_tien, 0);
+  const revenuePrev = sales.filter((s) => inPrevRange(s.ngay)).reduce((s, i) => s + i.tong_tien, 0);
+  const purchaseAmt = purchases.filter((s) => inRange(s.ngay)).reduce((s, i) => s + i.tong_tien, 0);
+  const purchaseAmtPrev = purchases.filter((s) => inPrevRange(s.ngay)).reduce((s, i) => s + i.tong_tien, 0);
+  const soDonBan = sales.filter((s) => inRange(s.ngay)).length;
+  const soDonBanPrev = sales.filter((s) => inPrevRange(s.ngay)).length;
 
   const totalPhaiThu = customers.reduce((sum, c) => sum + Math.max(tinhConNoKhachHang(c, sales, receipts, salereturns), 0), 0);
-
   const lowStock = products.filter((p) => (p.ton_kho || 0) <= (p.ton_toi_thieu || 0));
 
-  // last 7 days revenue trend
-  const days = Array.from({ length: 7 }).map((_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    const key = d.toISOString().slice(0, 10);
-    const doanhThu = sales.filter((s) => s.ngay === key).reduce((s, x) => s + x.tong_tien, 0);
-    return { name: key.slice(5), doanhThu };
-  });
+  // Biểu đồ doanh thu: theo ngày nếu khoảng ≤ 31 ngày, theo tháng nếu dài hơn.
+  const DAY = 86400000;
+  const spanDays = Math.floor((new Date(to) - new Date(from)) / DAY) + 1;
+  const chartData = useMemo(() => {
+    const inRangeSales = sales.filter((s) => inRange(s.ngay));
+    if (spanDays <= 31) {
+      const days = Array.from({ length: spanDays }).map((_, i) => {
+        const d = new Date(from);
+        d.setDate(d.getDate() + i);
+        const key = d.toISOString().slice(0, 10);
+        const doanhThu = inRangeSales.filter((s) => s.ngay === key).reduce((s, x) => s + x.tong_tien, 0);
+        return { name: key.slice(5), doanhThu };
+      });
+      return days;
+    }
+    const map = {};
+    inRangeSales.forEach((s) => {
+      const k = monthKey(s.ngay);
+      if (!k) return;
+      map[k] = (map[k] || 0) + s.tong_tien;
+    });
+    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([name, doanhThu]) => ({ name, doanhThu }));
+  }, [sales, from, to, spanDays]);
 
   const recent = [...sales].sort((a, b) => (b.ngay || "").localeCompare(a.ngay || "")).slice(0, 5);
 
   return (
     <div>
-      <PageHeader title="Bảng điều khiển" subtitle={`Tổng quan hoạt động kinh doanh · ${fmtDate(todayStr())}`} />
+      <PageHeader
+        title="Bảng điều khiển"
+        subtitle={`Tổng quan hoạt động kinh doanh · ${fmtDate(todayStr())}`}
+        action={
+          <div className="flex flex-wrap items-center gap-1.5">
+            {DASHBOARD_PRESETS.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => choosePreset(p.key)}
+                className="px-2.5 py-1.5 text-[12.5px] font-medium rounded-md"
+                style={preset === p.key ? { background: COLORS.navy, color: "#fff" } : { color: COLORS.textMuted, background: COLORS.bg }}
+              >
+                {p.label}
+              </button>
+            ))}
+            <div className="flex items-center gap-1 pl-1.5 ml-0.5" style={{ borderLeft: `1px solid ${COLORS.border}` }}>
+              <CalendarDays size={13} color={COLORS.textMuted} />
+              <input type="date" value={from} max={to} onChange={(e) => setCustomRange({ from: e.target.value })} className="text-[12px] rounded-md border px-1.5 py-1" style={{ borderColor: COLORS.border }} />
+              <span className="text-[12px]" style={{ color: COLORS.textMuted }}>–</span>
+              <input type="date" value={to} min={from} max={todayStr()} onChange={(e) => setCustomRange({ to: e.target.value })} className="text-[12px] rounded-md border px-1.5 py-1" style={{ borderColor: COLORS.border }} />
+            </div>
+          </div>
+        }
+      />
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-        <StatCard icon={TrendingUp} label="Doanh thu tháng này" value={fmtVND(revenueThisMonth)} tone="green" />
-        <StatCard icon={ShoppingBag} label="Mua hàng tháng này" value={fmtVND(purchaseThisMonth)} tone="navy" />
-        <StatCard icon={CircleDollarSign} label="Công nợ phải thu" value={fmtVND(totalPhaiThu)} tone="amber" />
+        <StatCard icon={TrendingUp} label="Doanh thu" value={fmtVND(revenue)} tone="green" sub={<ChangeBadge pct={pctChange(revenue, revenuePrev)} />} />
+        <StatCard icon={ShoppingBag} label="Mua hàng" value={fmtVND(purchaseAmt)} tone="navy" sub={<ChangeBadge pct={pctChange(purchaseAmt, purchaseAmtPrev)} />} />
+        <StatCard icon={FileBarChart} label="Số đơn bán" value={soDonBan} tone="amber" sub={<ChangeBadge pct={pctChange(soDonBan, soDonBanPrev)} />} />
         <StatCard icon={AlertTriangle} label="Hàng sắp hết tồn kho" value={lowStock.length} tone="red" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+        <StatCard icon={CircleDollarSign} label="Công nợ phải thu (hiện tại)" value={fmtVND(totalPhaiThu)} tone="amber" />
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="col-span-2 rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
-          <div className="text-[13.5px] font-semibold mb-3" style={{ color: COLORS.text }}>Doanh thu 7 ngày gần nhất</div>
+          <div className="text-[13.5px] font-semibold mb-3" style={{ color: COLORS.text }}>
+            Doanh thu {spanDays <= 31 ? "theo ngày" : "theo tháng"} — {fmtDate(from)} đến {fmtDate(to)}
+          </div>
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={days}>
+            <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
               <XAxis dataKey="name" tick={{ fontSize: 11, fill: COLORS.textMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
               <YAxis tick={{ fontSize: 11, fill: COLORS.textMuted }} axisLine={false} tickLine={false} width={40} tickFormatter={(v) => (v >= 1000000 ? (v / 1000000).toFixed(0) + "tr" : v)} />
@@ -4187,6 +4301,7 @@ function Dashboard({ products, customers, suppliers, sales, purchases, receipts,
               { key: "tong_tien", label: "Thành tiền", align: "right", render: (r) => fmtVND(r.tong_tien) },
             ]}
             rows={recent}
+            paginate={false}
           />
         )}
       </div>
@@ -4196,10 +4311,15 @@ function Dashboard({ products, customers, suppliers, sales, purchases, receipts,
 
 function ReportsPage({ sales, purchases, products, channels, warehouses }) {
   const [khoId, setKhoId] = useState("all");
-  const filteredSales = useMemo(
-    () => (khoId === "all" ? sales : sales.filter((s) => s.kho_id === khoId)),
-    [sales, khoId]
-  );
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const filteredSales = useMemo(() => {
+    let rows = khoId === "all" ? sales : sales.filter((s) => s.kho_id === khoId);
+    if (dateFrom) rows = rows.filter((s) => s.ngay >= dateFrom);
+    if (dateTo) rows = rows.filter((s) => s.ngay <= dateTo);
+    return rows;
+  }, [sales, khoId, dateFrom, dateTo]);
 
   const monthly = useMemo(() => {
     const map = {};
@@ -4256,7 +4376,16 @@ function ReportsPage({ sales, purchases, products, channels, warehouses }) {
         title="Báo cáo"
         subtitle="Doanh thu, lợi nhuận và hàng bán chạy"
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1">
+              <CalendarDays size={13} color={COLORS.textMuted} />
+              <input type="date" value={dateFrom} max={dateTo || undefined} onChange={(e) => setDateFrom(e.target.value)} className="text-[12px] rounded-md border px-1.5 py-1" style={{ borderColor: COLORS.border }} aria-label="Từ ngày" />
+              <span className="text-[12px]" style={{ color: COLORS.textMuted }}>–</span>
+              <input type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => setDateTo(e.target.value)} className="text-[12px] rounded-md border px-1.5 py-1" style={{ borderColor: COLORS.border }} aria-label="Đến ngày" />
+              {(dateFrom || dateTo) && (
+                <button onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-[11.5px] px-1.5 py-1 rounded-md hover:bg-slate-100" style={{ color: COLORS.textMuted }}>Xóa lọc</button>
+              )}
+            </div>
             {warehouses?.length > 1 && (
               <select className={inputCls} style={{ ...inputStyle, minWidth: 150 }} value={khoId} onChange={(e) => setKhoId(e.target.value)}>
                 <option value="all">Tất cả các kho</option>
