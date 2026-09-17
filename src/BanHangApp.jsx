@@ -165,6 +165,7 @@ const STORE_KEYS = {
   warehouses: "ntcons:warehouses",
   einvoiceconfig: "ntcons:einvoiceconfig",
   company: "ntcons:company",
+  stocktakes: "ntcons:stocktakes",
   counters: "ntcons:counters",
 };
 
@@ -275,6 +276,7 @@ const STORE_LABELS = {
   warehouses: "Kho / Chi nhánh",
   einvoiceconfig: "Cấu hình hóa đơn điện tử",
   company: "Thông tin công ty",
+  stocktakes: "Kiểm kê kho",
 };
 const STORE_KEY_TO_LABEL = Object.fromEntries(
   Object.entries(STORE_KEYS).map(([short, full]) => [full, STORE_LABELS[short] || short])
@@ -659,6 +661,7 @@ const NAV_GROUPS = [
     label: "Kho & Báo cáo",
     items: [
       { key: "stock", label: "Tồn kho", icon: Boxes },
+      { key: "stocktake", label: "Kiểm kê kho", icon: ClipboardList },
       { key: "nxt", label: "Nhập - Xuất - Tồn", icon: Boxes },
       { key: "reports", label: "Báo cáo", icon: FileBarChart },
       { key: "taxreport", label: "Báo cáo thuế", icon: Landmark },
@@ -694,7 +697,7 @@ const ROLE_PAGES = {
   admin: null, // null = all pages
   sales: ["dashboard", "products", "customers", "pos", "salesorders", "sales", "salereturns", "stock", "pricelists", "channels"],
   accountant: ["dashboard", "customers", "suppliers", "receipts", "payments", "soquy", "debt", "reports", "taxreport", "employees", "payroll", "pricelists", "paymentmethods", "nxt"],
-  warehouse: ["dashboard", "products", "stockin", "stockout", "stocktransfer", "stock", "nxt", "warehouses"],
+  warehouse: ["dashboard", "products", "stockin", "stockout", "stocktransfer", "stock", "stocktake", "nxt", "warehouses"],
 };
 
 function Sidebar({ page, setPage, collapsed, setCollapsed, allowedPages, user, onLogout, mobileOpen, onCloseMobile }) {
@@ -1274,6 +1277,7 @@ function PartnerPage({ store, kind, priceLists }) {
               { key: "chiet_khau_pct", label: "Chiết khấu", align: "right", render: (r) => (r.chiet_khau_pct ? `${r.chiet_khau_pct}%` : "—") },
             ] : []),
             { key: "no_dau", label: "Nợ đầu kỳ", align: "right", render: (r) => fmtVND(r.no_dau) },
+            ...(kind === "customer" ? [{ key: "han_muc_cong_no", label: "Hạn mức nợ", align: "right", render: (r) => (r.han_muc_cong_no > 0 ? fmtVND(r.han_muc_cong_no) : "Không giới hạn") }] : []),
           ]}
           rows={filtered}
           onEdit={setEditing}
@@ -1299,6 +1303,7 @@ function PartnerForm({ initial, onSave, onCancel, kind, priceLists }) {
     dia_chi: initial.dia_chi || "",
     ma_so_thue: initial.ma_so_thue || "",
     no_dau: initial.no_dau || 0,
+    han_muc_cong_no: initial.han_muc_cong_no || 0,
     bang_gia_id: initial.bang_gia_id || "",
     chiet_khau_pct: initial.chiet_khau_pct || 0,
     id: initial.id,
@@ -1322,6 +1327,11 @@ function PartnerForm({ initial, onSave, onCancel, kind, priceLists }) {
           </Field>
           <Field label="Chiết khấu mặc định (%)"><input type="number" min="0" max="100" className={inputCls} style={inputStyle} value={f.chiet_khau_pct} onChange={(e) => setF({ ...f, chiet_khau_pct: +e.target.value })} /></Field>
         </div>
+      )}
+      {kind === "customer" && (
+        <Field label="Hạn mức công nợ">
+          <input type="number" min="0" className={inputCls} style={inputStyle} value={f.han_muc_cong_no} onChange={(e) => setF({ ...f, han_muc_cong_no: +e.target.value })} placeholder="Để trống hoặc 0 = không giới hạn" />
+        </Field>
       )}
       <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
         <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
@@ -1590,6 +1600,77 @@ function adjustProductStock(product, delta, whId) {
   return next;
 }
 
+/* Giá vốn bình quân gia quyền: mỗi lần nhập thêm hàng với giá khác, giá vốn
+   của mặt hàng được cập nhật thành bình quân theo số lượng đang có + số lượng
+   mới nhập. Không hoàn tác khi xóa phiếu nhập (giá vốn không "gỡ" lại được
+   một cách đáng tin cậy nếu đã có lượt bán xảy ra sau đó). */
+function weightedAvgCost(oldQty, oldCost, addQty, addCost) {
+  const q0 = Number(oldQty) || 0;
+  const q1 = Number(addQty) || 0;
+  const newQty = q0 + q1;
+  if (newQty <= 0) return Number(oldCost) || 0;
+  if (q0 <= 0) return Number(addCost) || 0;
+  return Math.round((q0 * (Number(oldCost) || 0) + q1 * (Number(addCost) || 0)) / newQty);
+}
+
+/* ------------------------------------------------------------------ */
+/* Công nợ — hàm dùng chung cho Dashboard, Công nợ, và cảnh báo hạn mức */
+/* ------------------------------------------------------------------ */
+/** Tổng tiền phải thu/trả của MỘT chứng từ, đã gồm thuế GTGT nếu có. */
+function invoiceGrandTotal(inv) {
+  return (inv?.tong_tien || 0) + (inv?.thue_gtgt || 0);
+}
+
+function tinhConNoKhachHang(customer, sales, receipts, salereturns) {
+  const banHang = (sales || []).filter((s) => s.doi_tac_id === customer.id).reduce((s, i) => s + invoiceGrandTotal(i), 0);
+  const daThuTrenHD = (sales || []).filter((s) => s.doi_tac_id === customer.id).reduce((s, i) => s + (i.da_thanh_toan || 0), 0);
+  const thuThem = (receipts || []).filter((r) => r.doi_tac_id === customer.id).reduce((s, i) => s + (i.so_tien || 0), 0);
+  const traHang = (salereturns || []).filter((r) => r.doi_tac_id === customer.id).reduce((s, i) => s + (i.tong_tien || 0), 0);
+  return (customer.no_dau || 0) + banHang - daThuTrenHD - thuThem - traHang;
+}
+
+function tinhConNoNCC(supplier, purchases, payments, purchasereturns) {
+  const muaHang = (purchases || []).filter((s) => s.doi_tac_id === supplier.id).reduce((s, i) => s + invoiceGrandTotal(i), 0);
+  const daTraTrenHD = (purchases || []).filter((s) => s.doi_tac_id === supplier.id).reduce((s, i) => s + (i.da_thanh_toan || 0), 0);
+  const traThem = (payments || []).filter((r) => r.doi_tac_id === supplier.id).reduce((s, i) => s + (i.so_tien || 0), 0);
+  const traHang = (purchasereturns || []).filter((r) => r.doi_tac_id === supplier.id).reduce((s, i) => s + (i.tong_tien || 0), 0);
+  return (supplier.no_dau || 0) + muaHang - daTraTrenHD - traThem - traHang;
+}
+
+/** Tuổi nợ theo từng chứng từ chưa thu/trả hết, phân bổ các khoản thu/trả
+    thêm và trả hàng theo nguyên tắc "hóa đơn cũ nhất trước" (FIFO). */
+function tinhTuoiNo(partnerId, noDauKy, invoices, extraPayments, returns) {
+  const rows = (invoices || [])
+    .filter((s) => s.doi_tac_id === partnerId)
+    .map((s) => ({ ngay: s.ngay, con: invoiceGrandTotal(s) - (s.da_thanh_toan || 0) }))
+    .filter((x) => x.con > 0.5)
+    .sort((a, b) => (a.ngay || "").localeCompare(b.ngay || ""));
+
+  if ((noDauKy || 0) > 0.5) rows.unshift({ ngay: "2000-01-01", con: noDauKy });
+
+  let extra =
+    (extraPayments || []).filter((r) => r.doi_tac_id === partnerId).reduce((s, i) => s + (i.so_tien || 0), 0) +
+    (returns || []).filter((r) => r.doi_tac_id === partnerId).reduce((s, i) => s + (i.tong_tien || 0), 0);
+
+  const today = todayStr();
+  const buckets = { d0_30: 0, d31_60: 0, d61_90: 0, d90: 0 };
+  for (const row of rows) {
+    let con = row.con;
+    if (extra > 0) {
+      const apply = Math.min(extra, con);
+      con -= apply;
+      extra -= apply;
+    }
+    if (con <= 0.5) continue;
+    const age = Math.floor((new Date(today) - new Date(row.ngay)) / 86400000);
+    if (age <= 30) buckets.d0_30 += con;
+    else if (age <= 60) buckets.d31_60 += con;
+    else if (age <= 90) buckets.d61_90 += con;
+    else buckets.d90 += con;
+  }
+  return buckets;
+}
+
 /* ------------------------------------------------------------------ */
 /* Hóa đơn điện tử — cấu hình đánh số (chưa nộp thuế điện tử thật)      */
 /* ------------------------------------------------------------------ */
@@ -1777,7 +1858,7 @@ function EInvoiceSettingsPage({ store }) {
 /* ------------------------------------------------------------------ */
 /* Invoices: Bán hàng / Mua hàng                                       */
 /* ------------------------------------------------------------------ */
-function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, channels, soStore, warehouses, einvoiceStore }) {
+function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, channels, soStore, warehouses, einvoiceStore, receiptsData, salereturnsData }) {
   // mode: 'sale' | 'purchase'
   const isSale = mode === "sale";
   const { items: invoices, add: addInv, remove: removeInv } = invStore;
@@ -1792,9 +1873,11 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
   const partnerName = (id) => partners.find((p) => p.id === id)?.ten || "—";
   const channelName = (id) => (channels || []).find((c) => c.id === id)?.ten;
 
-  /* Thuế GTGT chỉ hiện trên bản in khi bật trong Thông tin công ty.
-     Thuế tính từ thuế suất khai trên từng mặt hàng; giá bán đang nhập là giá chưa thuế. */
+  /* Thuế GTGT: dùng số đã lưu trên chứng từ; chứng từ cũ (trước khi có tính
+     năng này) không có trường thue_gtgt nên ước tính lại từ thuế suất từng
+     mặt hàng, chỉ khi tùy chọn in thuế đang bật. */
   function vatOf(inv) {
+    if (inv.thue_gtgt != null) return inv.thue_gtgt;
     if (!CURRENT_COMPANY.in_thue_gtgt) return 0;
     const ratio = inv.tam_tinh > 0 ? (inv.tong_tien || 0) / inv.tam_tinh : 1; // phân bổ chiết khấu
     return Math.round(
@@ -1803,6 +1886,11 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
         return s + (it.so_luong || 0) * (it.don_gia || 0) * ratio * (rate / 100);
       }, 0)
     );
+  }
+
+  /** Tổng tiền phải thu/trả của chứng từ, gồm cả thuế GTGT. */
+  function totalOf(inv) {
+    return (inv.tong_tien || 0) + vatOf(inv);
   }
 
   function openPrint(inv) {
@@ -1829,7 +1917,12 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
       const next = cur.map((p) => {
         const line = form.items.find((it) => it.hang_hoa_id === p.id);
         if (!line) return p;
-        return adjustProductStock(p, delta * line.so_luong, form.kho_id);
+        let updated = adjustProductStock(p, delta * line.so_luong, form.kho_id);
+        if (!isSale) {
+          // Mua hàng: giá vốn cập nhật theo bình quân gia quyền của giá nhập mới.
+          updated = { ...updated, gia_von: weightedAvgCost(p.ton_kho || 0, p.gia_von || 0, line.so_luong, line.don_gia) };
+        }
+        return updated;
       });
       storageSet(STORE_KEYS.products, next);
       return next;
@@ -1879,12 +1972,13 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
             { key: "ngay", label: "Ngày", render: (r) => fmtDate(r.ngay) },
             { key: "doi_tac", label: isSale ? "Khách hàng" : "Nhà cung cấp", render: (r) => partnerName(r.doi_tac_id) },
             ...(isSale && channels?.length ? [{ key: "kenh_id", label: "Kênh", render: (r) => channelName(r.kenh_id) ? <Badge tone="muted">{channelName(r.kenh_id)}</Badge> : "—" }] : []),
-            { key: "so_luong", label: "Số mặt hàng", align: "right", render: (r) => r.items.length },
-            { key: "tong_tien", label: "Thành tiền", align: "right", render: (r) => fmtVND(r.tong_tien) },
+            { key: "so_luong", label: "Số mặt hàng", align: "right", render: (r) => r.items.length, sortable: false },
+            { key: "tong_tien", label: "Thành tiền", align: "right", render: (r) => fmtVND(totalOf(r)), sortValue: (r) => totalOf(r) },
             {
               key: "trang_thai",
               label: "Trạng thái",
-              render: (r) => (r.da_thanh_toan >= r.tong_tien ? <Badge tone="green">Đã thanh toán</Badge> : r.da_thanh_toan > 0 ? <Badge tone="amber">Thanh toán 1 phần</Badge> : <Badge tone="red">Chưa thanh toán</Badge>),
+              sortable: false,
+              render: (r) => (r.da_thanh_toan >= totalOf(r) ? <Badge tone="green">Đã thanh toán</Badge> : r.da_thanh_toan > 0 ? <Badge tone="amber">Thanh toán 1 phần</Badge> : <Badge tone="red">Chưa thanh toán</Badge>),
             },
           ]}
           rows={filtered}
@@ -1893,7 +1987,19 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
         />
       )}
       {creating && (
-        <InvoiceForm mode={mode} partners={partners} products={products} priceLists={priceLists} channels={channels} warehouses={warehouses} onCancel={() => setCreating(false)} onSave={createInvoice} />
+        <InvoiceForm
+          mode={mode}
+          partners={partners}
+          products={products}
+          priceLists={priceLists}
+          channels={channels}
+          warehouses={warehouses}
+          onCancel={() => setCreating(false)}
+          onSave={createInvoice}
+          existingInvoices={invoices}
+          receiptsData={receiptsData}
+          salereturnsData={salereturnsData}
+        />
       )}
       {viewing && (
         <Modal title={`Chi tiết ${viewing.ma}`} onClose={() => setViewing(null)} width="max-w-2xl">
@@ -1913,6 +2019,7 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
             ]}
             rows={viewing.items}
             rowKey="hang_hoa_id"
+            paginate={false}
           />
           <div className="flex flex-col items-end mt-3 gap-0.5">
             {viewing.chiet_khau_pct > 0 && (
@@ -1921,7 +2028,10 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
                 <div className="text-[13px]" style={{ color: COLORS.red }}>Chiết khấu ({viewing.chiet_khau_pct}%): -{fmtVND((viewing.tam_tinh ?? viewing.tong_tien) - viewing.tong_tien)}</div>
               </>
             )}
-            <div className="text-[14px] font-semibold" style={{ color: COLORS.text }}>Tổng cộng: {fmtVND(viewing.tong_tien)}</div>
+            {vatOf(viewing) > 0 && (
+              <div className="text-[13px]" style={{ color: COLORS.textMuted }}>Thuế GTGT: {fmtVND(vatOf(viewing))}</div>
+            )}
+            <div className="text-[14px] font-semibold" style={{ color: COLORS.text }}>Tổng thanh toán: {fmtVND(totalOf(viewing))}</div>
           </div>
         </Modal>
       )}
@@ -1955,7 +2065,7 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
   );
 }
 
-function InvoiceForm({ mode, partners, products, priceLists, channels, warehouses, onCancel, onSave, initialDoc }) {
+function InvoiceForm({ mode, partners, products, priceLists, channels, warehouses, onCancel, onSave, initialDoc, existingInvoices, receiptsData, salereturnsData }) {
   const isSale = mode === "sale";
   const [doiTacId, setDoiTacId] = useState(initialDoc?.doi_tac_id || partners[0]?.id || "");
   const [kenhId, setKenhId] = useState(initialDoc?.kenh_id || "");
@@ -1971,6 +2081,21 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, warehouse
   const subtotal = lines.reduce((s, l) => s + (Number(l.so_luong) || 0) * (Number(l.don_gia) || 0), 0);
   const discountAmount = isSale ? subtotal * (chietKhauPct / 100) : 0;
   const total = subtotal - discountAmount;
+
+  // Thuế GTGT: tính từ thuế suất khai trên từng mặt hàng, chỉ khi công ty bật tùy chọn in thuế.
+  const vatEnabled = !!CURRENT_COMPANY.in_thue_gtgt;
+  const vatAmount = vatEnabled
+    ? Math.round(
+        lines.reduce((s, l) => {
+          const rate = products.find((p) => p.id === l.hang_hoa_id)?.thue_suat_vat ?? 0;
+          const lineAmt = (Number(l.so_luong) || 0) * (Number(l.don_gia) || 0);
+          const afterDiscount = isSale ? lineAmt * (1 - chietKhauPct / 100) : lineAmt;
+          return s + afterDiscount * (rate / 100);
+        }, 0)
+      )
+    : 0;
+  const grandTotal = total + vatAmount;
+
   const hasOversell = isSale && lines.some((l) => {
     const product = products.find((p) => p.id === l.hang_hoa_id);
     if (!product) return false;
@@ -1978,6 +2103,11 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, warehouse
     const available = khoId && product.ton_kho_theo_kho ? (product.ton_kho_theo_kho[khoId] || 0) : (product.ton_kho || 0);
     return (Number(l.so_luong) || 0) * tyLe > available;
   });
+
+  // Hạn mức công nợ: cảnh báo nếu chứng từ này sẽ đẩy công nợ khách hàng vượt hạn mức đã khai.
+  const customerDebtNow = isSale && customer ? tinhConNoKhachHang(customer, existingInvoices || [], receiptsData || [], salereturnsData || []) : 0;
+  const projectedDebt = customerDebtNow + grandTotal - (Number(daThanhToan) || 0);
+  const overCreditLimit = isSale && customer?.han_muc_cong_no > 0 && projectedDebt > customer.han_muc_cong_no;
 
   function priceFor(productId) {
     const prod = products.find((p) => p.id === productId);
@@ -2037,6 +2167,7 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, warehouse
       items: withNames,
       tam_tinh: subtotal,
       chiet_khau_pct: isSale ? chietKhauPct : 0,
+      thue_gtgt: vatAmount,
       tong_tien: total,
       da_thanh_toan: Number(daThanhToan) || 0,
       don_dat_hang_id: initialDoc?.id,
@@ -2065,6 +2196,11 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, warehouse
         {hasOversell && (
           <div className="mb-3 px-3 py-2 rounded-md text-[12.5px] flex items-center gap-2" style={{ background: COLORS.redBg, color: COLORS.red }}>
             <AlertTriangle size={13} /> Có hàng hóa đang bán vượt tồn kho hiện có — tồn kho sẽ về số âm nếu vẫn lưu chứng từ này.
+          </div>
+        )}
+        {overCreditLimit && (
+          <div className="mb-3 px-3 py-2 rounded-md text-[12.5px] flex items-center gap-2" style={{ background: COLORS.redBg, color: COLORS.red }}>
+            <AlertTriangle size={13} /> Khách hàng sẽ nợ {fmtVND(projectedDebt)} sau chứng từ này — vượt hạn mức công nợ {fmtVND(customer.han_muc_cong_no)}.
           </div>
         )}
         {isSale && channels?.length > 0 && (
@@ -2135,8 +2271,11 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, warehouse
                 <span className="text-[12px]" style={{ color: COLORS.red }}>Chiết khấu: -{fmtVND(discountAmount)}</span>
               </>
             )}
-            <span className="text-[12.5px]" style={{ color: COLORS.textMuted }}>Tổng cộng</span>
-            <span className="text-[18px] font-semibold" style={{ color: COLORS.navy }}>{fmtVND(total)}</span>
+            {vatAmount > 0 && (
+              <span className="text-[12px]" style={{ color: COLORS.textMuted }}>Thuế GTGT: {fmtVND(vatAmount)}</span>
+            )}
+            <span className="text-[12.5px]" style={{ color: COLORS.textMuted }}>{vatAmount > 0 ? "Tổng thanh toán" : "Tổng cộng"}</span>
+            <span className="text-[18px] font-semibold" style={{ color: COLORS.navy }}>{fmtVND(grandTotal)}</span>
           </div>
         </div>
 
@@ -2624,7 +2763,11 @@ function StockVoucherPage({ type, store, productStore, warehouses }) {
     setProducts((cur) => {
       const next = cur.map((p) => {
         if (p.id !== form.hang_hoa_id) return p;
-        return adjustProductStock(p, delta * form.so_luong, form.kho_id);
+        let updated = adjustProductStock(p, delta * form.so_luong, form.kho_id);
+        if (isIn && form.don_gia > 0) {
+          updated = { ...updated, gia_von: weightedAvgCost(p.ton_kho || 0, p.gia_von || 0, form.so_luong, form.don_gia) };
+        }
+        return updated;
       });
       storageSet(STORE_KEYS.products, next);
       return next;
@@ -2693,6 +2836,7 @@ function StockVoucherForm({ isIn, products, warehouses, onSave, onCancel }) {
   const [ngay, setNgay] = useState(todayStr());
   const [lyDo, setLyDo] = useState("");
   const [khoId, setKhoId] = useState(warehouses?.[0]?.id || "");
+  const [donGia, setDonGia] = useState(0);
 
   const product = products.find((p) => p.id === hangHoaId);
   const units = [{ ten: product?.dvt || "Cái", ty_le: 1 }, ...((product?.don_vi_quy_doi) || [])];
@@ -2707,6 +2851,7 @@ function StockVoucherForm({ isIn, products, warehouses, onSave, onCancel }) {
       ngay,
       ly_do: lyDo,
       kho_id: khoId || undefined,
+      don_gia: isIn ? Number(donGia) || 0 : undefined,
       ma: uid(isIn ? "PNK" : "PXK").toUpperCase(),
       ten_hang: product?.ten,
     });
@@ -2743,6 +2888,11 @@ function StockVoucherForm({ isIn, products, warehouses, onSave, onCancel }) {
           </Field>
           <Field label="Ngày"><input type="date" className={inputCls} style={inputStyle} value={ngay} onChange={(e) => setNgay(e.target.value)} /></Field>
         </div>
+        {isIn && (
+          <Field label="Đơn giá nhập (để trống nếu không đổi giá vốn)">
+            <input type="number" min="0" className={inputCls} style={inputStyle} value={donGia} onChange={(e) => setDonGia(e.target.value)} placeholder="VD: nhập điều chỉnh có giá — sẽ cập nhật giá vốn bình quân" />
+          </Field>
+        )}
         <Field label="Lý do"><input className={inputCls} style={inputStyle} value={lyDo} onChange={(e) => setLyDo(e.target.value)} placeholder={isIn ? "VD: nhập điều chỉnh, chuyển kho..." : "VD: hao hụt, hỏng, chuyển kho..."} /></Field>
         <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
           <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
@@ -3158,42 +3308,67 @@ function DebtPage({ customers, suppliers, sales, purchases, receipts, payments, 
   const [tab, setTab] = useState("kh");
 
   const khRows = customers.map((c) => {
-    const banHang = sales.filter((s) => s.doi_tac_id === c.id).reduce((s, i) => s + i.tong_tien, 0);
+    const banHang = sales.filter((s) => s.doi_tac_id === c.id).reduce((s, i) => s + invoiceGrandTotal(i), 0);
     const daThuTrenHD = sales.filter((s) => s.doi_tac_id === c.id).reduce((s, i) => s + (i.da_thanh_toan || 0), 0);
     const thuThem = receipts.filter((r) => r.doi_tac_id === c.id).reduce((s, i) => s + i.so_tien, 0);
     const traHang = (salereturns || []).filter((r) => r.doi_tac_id === c.id).reduce((s, i) => s + i.tong_tien, 0);
-    const noDau = c.no_dau || 0;
-    const conNo = noDau + banHang - daThuTrenHD - thuThem - traHang;
-    return { ...c, phatSinh: banHang, daThu: daThuTrenHD + thuThem, traHang, conNo };
+    const conNo = tinhConNoKhachHang(c, sales, receipts, salereturns);
+    const tuoiNo = tinhTuoiNo(c.id, c.no_dau || 0, sales, receipts, salereturns);
+    return { ...c, phatSinh: banHang, daThu: daThuTrenHD + thuThem, traHang, conNo, ...tuoiNo };
   });
 
   const nccRows = suppliers.map((c) => {
-    const muaHang = purchases.filter((s) => s.doi_tac_id === c.id).reduce((s, i) => s + i.tong_tien, 0);
+    const muaHang = purchases.filter((s) => s.doi_tac_id === c.id).reduce((s, i) => s + invoiceGrandTotal(i), 0);
     const daTraTrenHD = purchases.filter((s) => s.doi_tac_id === c.id).reduce((s, i) => s + (i.da_thanh_toan || 0), 0);
     const traThem = payments.filter((r) => r.doi_tac_id === c.id).reduce((s, i) => s + i.so_tien, 0);
     const traHang = (purchasereturns || []).filter((r) => r.doi_tac_id === c.id).reduce((s, i) => s + i.tong_tien, 0);
-    const noDau = c.no_dau || 0;
-    const conNo = noDau + muaHang - daTraTrenHD - traThem - traHang;
-    return { ...c, phatSinh: muaHang, daTra: daTraTrenHD + traThem, traHang, conNo };
+    const conNo = tinhConNoNCC(c, purchases, payments, purchasereturns);
+    const tuoiNo = tinhTuoiNo(c.id, c.no_dau || 0, purchases, payments, purchasereturns);
+    return { ...c, phatSinh: muaHang, daTra: daTraTrenHD + traThem, traHang, conNo, ...tuoiNo };
   });
 
   const totalPhaiThu = khRows.reduce((s, r) => s + Math.max(r.conNo, 0), 0);
   const totalPhaiTra = nccRows.reduce((s, r) => s + Math.max(r.conNo, 0), 0);
+  const overLimitCount = khRows.filter((r) => r.han_muc_cong_no > 0 && r.conNo > r.han_muc_cong_no).length;
 
   function doExport() {
     exportExcel("cong-no", [
-      { name: "Công nợ KH", rows: khRows.map((r) => ({ "Khách hàng": r.ten, "Phát sinh": r.phatSinh, "Đã thu": r.daThu, "Trả hàng": r.traHang, "Còn phải thu": r.conNo })) },
-      { name: "Công nợ NCC", rows: nccRows.map((r) => ({ "Nhà cung cấp": r.ten, "Phát sinh": r.phatSinh, "Đã trả": r.daTra, "Trả hàng": r.traHang, "Còn phải trả": r.conNo })) },
+      {
+        name: "Công nợ KH",
+        rows: khRows.map((r) => ({
+          "Khách hàng": r.ten, "Phát sinh": r.phatSinh, "Đã thu": r.daThu, "Trả hàng": r.traHang, "Còn phải thu": r.conNo,
+          "Nợ 0-30 ngày": r.d0_30, "Nợ 31-60 ngày": r.d31_60, "Nợ 61-90 ngày": r.d61_90, "Nợ trên 90 ngày": r.d90,
+        })),
+      },
+      {
+        name: "Công nợ NCC",
+        rows: nccRows.map((r) => ({
+          "Nhà cung cấp": r.ten, "Phát sinh": r.phatSinh, "Đã trả": r.daTra, "Trả hàng": r.traHang, "Còn phải trả": r.conNo,
+          "Nợ 0-30 ngày": r.d0_30, "Nợ 31-60 ngày": r.d31_60, "Nợ 61-90 ngày": r.d61_90, "Nợ trên 90 ngày": r.d90,
+        })),
+      },
     ]);
   }
 
+  const agingCols = [
+    { key: "d0_30", label: "0–30 ngày", align: "right", render: (r) => (r.d0_30 > 0 ? fmtVND(r.d0_30) : "—") },
+    { key: "d31_60", label: "31–60 ngày", align: "right", render: (r) => (r.d31_60 > 0 ? <span style={{ color: COLORS.amber }}>{fmtVND(r.d31_60)}</span> : "—") },
+    { key: "d61_90", label: "61–90 ngày", align: "right", render: (r) => (r.d61_90 > 0 ? <span style={{ color: COLORS.red }}>{fmtVND(r.d61_90)}</span> : "—") },
+    { key: "d90", label: "Trên 90 ngày", align: "right", render: (r) => (r.d90 > 0 ? <span style={{ color: COLORS.red, fontWeight: 600 }}>{fmtVND(r.d90)}</span> : "—") },
+  ];
+
   return (
     <div>
-      <PageHeader title="Công nợ" subtitle="Theo dõi công nợ phải thu và phải trả" action={<ExcelButton onClick={doExport} />} />
+      <PageHeader title="Công nợ" subtitle="Theo dõi công nợ phải thu, phải trả và tuổi nợ 30/60/90 ngày" action={<ExcelButton onClick={doExport} />} />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
         <StatCard icon={TrendingUp} label="Tổng phải thu (khách hàng)" value={fmtVND(totalPhaiThu)} tone="green" />
         <StatCard icon={TrendingDown} label="Tổng phải trả (nhà cung cấp)" value={fmtVND(totalPhaiTra)} tone="red" />
       </div>
+      {overLimitCount > 0 && (
+        <div className="mb-4 px-3 py-2 rounded-md text-[12.5px] flex items-center gap-2" style={{ background: COLORS.redBg, color: COLORS.red }}>
+          <AlertTriangle size={14} /> {overLimitCount} khách hàng đang nợ vượt hạn mức công nợ đã khai.
+        </div>
+      )}
       <div className="flex gap-1 mb-3">
         {[{ k: "kh", l: "Công nợ khách hàng" }, { k: "ncc", l: "Công nợ nhà cung cấp" }].map((t) => (
           <button
@@ -3210,11 +3385,20 @@ function DebtPage({ customers, suppliers, sales, purchases, receipts, payments, 
         khRows.length === 0 ? <EmptyState icon={CircleDollarSign} title="Chưa có dữ liệu công nợ" hint="Thêm khách hàng và đơn bán hàng để xem công nợ." /> : (
           <Table
             columns={[
-              { key: "ten", label: "Khách hàng" },
-              { key: "phatSinh", label: "Phát sinh bán hàng", align: "right", render: (r) => fmtVND(r.phatSinh) },
-              { key: "daThu", label: "Đã thu", align: "right", render: (r) => fmtVND(r.daThu) },
-              { key: "traHang", label: "Trả hàng", align: "right", render: (r) => fmtVND(r.traHang) },
+              {
+                key: "ten", label: "Khách hàng",
+                render: (r) => (
+                  <span>
+                    {r.ten}
+                    {r.han_muc_cong_no > 0 && r.conNo > r.han_muc_cong_no && (
+                      <Badge tone="red"> Vượt hạn mức</Badge>
+                    )}
+                  </span>
+                ),
+              },
               { key: "conNo", label: "Còn phải thu", align: "right", render: (r) => <span style={{ color: r.conNo > 0 ? COLORS.red : COLORS.green, fontWeight: 600 }}>{fmtVND(r.conNo)}</span> },
+              ...agingCols,
+              { key: "daThu", label: "Đã thu", align: "right", render: (r) => fmtVND(r.daThu) },
             ]}
             rows={khRows}
           />
@@ -3224,10 +3408,9 @@ function DebtPage({ customers, suppliers, sales, purchases, receipts, payments, 
           <Table
             columns={[
               { key: "ten", label: "Nhà cung cấp" },
-              { key: "phatSinh", label: "Phát sinh mua hàng", align: "right", render: (r) => fmtVND(r.phatSinh) },
-              { key: "daTra", label: "Đã trả", align: "right", render: (r) => fmtVND(r.daTra) },
-              { key: "traHang", label: "Trả hàng", align: "right", render: (r) => fmtVND(r.traHang) },
               { key: "conNo", label: "Còn phải trả", align: "right", render: (r) => <span style={{ color: r.conNo > 0 ? COLORS.red : COLORS.green, fontWeight: 600 }}>{fmtVND(r.conNo)}</span> },
+              ...agingCols,
+              { key: "daTra", label: "Đã trả", align: "right", render: (r) => fmtVND(r.daTra) },
             ]}
             rows={nccRows}
           />
@@ -3306,6 +3489,214 @@ function StockPage({ products, warehouses }) {
         />
       )}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Kiểm kê kho — đếm thực tế và điều chỉnh chênh lệch với sổ sách        */
+/* ------------------------------------------------------------------ */
+function StockTakePage({ store, productStore, warehouses }) {
+  const { items, add, remove } = store;
+  const { items: products, setItems: setProducts } = productStore;
+  const [creating, setCreating] = useState(false);
+  const [viewing, setViewing] = useState(null);
+  const [toDelete, setToDelete] = useState(null);
+  const list = [...items].sort((a, b) => (b.ngay || "").localeCompare(a.ngay || ""));
+
+  function create(form) {
+    add({ ...form, id: uid("KK") });
+    setProducts((cur) => {
+      const next = cur.map((p) => {
+        const line = form.lines.find((l) => l.hang_hoa_id === p.id);
+        if (!line || line.chenh_lech === 0) return p;
+        return adjustProductStock(p, line.chenh_lech, form.kho_id);
+      });
+      storageSet(STORE_KEYS.products, next);
+      return next;
+    });
+    setCreating(false);
+    toast(`Đã cân bằng kho theo ${form.lines.length} mặt hàng chênh lệch.`);
+  }
+
+  function del(v) {
+    // Hoàn tác: trừ lại đúng phần chênh lệch đã áp dụng.
+    setProducts((cur) => {
+      const next = cur.map((p) => {
+        const line = v.lines.find((l) => l.hang_hoa_id === p.id);
+        if (!line || line.chenh_lech === 0) return p;
+        return adjustProductStock(p, -line.chenh_lech, v.kho_id);
+      });
+      storageSet(STORE_KEYS.products, next);
+      return next;
+    });
+    remove(v.id);
+    setToDelete(null);
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Kiểm kê kho"
+        subtitle="Đối chiếu tồn kho thực tế với sổ sách và tự động cân bằng chênh lệch"
+        action={<Btn onClick={() => setCreating(true)}><Plus size={15} /> Tạo phiếu kiểm kê</Btn>}
+      />
+      {list.length === 0 ? (
+        <EmptyState icon={Boxes} title="Chưa có phiếu kiểm kê nào" hint="Đếm hàng thực tế định kỳ để phát hiện sớm thất thoát hoặc sai lệch nhập liệu." action={<Btn onClick={() => setCreating(true)}><Plus size={15} /> Tạo phiếu kiểm kê</Btn>} />
+      ) : (
+        <Table
+          columns={[
+            { key: "ma", label: "Số phiếu" },
+            { key: "ngay", label: "Ngày", render: (r) => fmtDate(r.ngay) },
+            { key: "kho_ten", label: "Kho / Chi nhánh", render: (r) => r.kho_ten || "—" },
+            { key: "so_mat_hang", label: "Số mặt hàng chênh lệch", align: "right", render: (r) => r.lines.length },
+            {
+              key: "gia_tri_lech",
+              label: "Giá trị chênh lệch",
+              align: "right",
+              render: (r) => {
+                const v = r.lines.reduce((s, l) => s + l.chenh_lech * (l.gia_von || 0), 0);
+                return <span style={{ color: v < 0 ? COLORS.red : v > 0 ? COLORS.green : COLORS.textMuted, fontWeight: 600 }}>{fmtVND(v)}</span>;
+              },
+            },
+          ]}
+          rows={list}
+          onEdit={setViewing}
+          onDelete={setToDelete}
+        />
+      )}
+      {creating && <StockTakeForm products={products} warehouses={warehouses} onCancel={() => setCreating(false)} onSave={create} />}
+      {viewing && (
+        <Modal title={`Chi tiết ${viewing.ma}`} onClose={() => setViewing(null)} width="max-w-2xl">
+          <div className="mb-3 text-[13px]" style={{ color: COLORS.textMuted }}>
+            Ngày kiểm kê: {fmtDate(viewing.ngay)} {viewing.kho_ten && <>· Kho: {viewing.kho_ten}</>} {viewing.ghi_chu && <>· Ghi chú: {viewing.ghi_chu}</>}
+          </div>
+          <Table
+            columns={[
+              { key: "ten", label: "Hàng hóa" },
+              { key: "so_sach", label: "Sổ sách", align: "right" },
+              { key: "thuc_te", label: "Thực tế", align: "right" },
+              {
+                key: "chenh_lech", label: "Chênh lệch", align: "right",
+                render: (r) => <span style={{ color: r.chenh_lech < 0 ? COLORS.red : r.chenh_lech > 0 ? COLORS.green : COLORS.textMuted, fontWeight: 600 }}>{r.chenh_lech > 0 ? "+" : ""}{r.chenh_lech}</span>,
+              },
+            ]}
+            rows={viewing.lines}
+            rowKey="hang_hoa_id"
+            paginate={false}
+          />
+        </Modal>
+      )}
+      {toDelete && (
+        <ConfirmBar text={`Xóa phiếu "${toDelete.ma}"? Tồn kho sẽ trở về như trước khi kiểm kê.`} onConfirm={() => del(toDelete)} onCancel={() => setToDelete(null)} />
+      )}
+    </div>
+  );
+}
+
+function StockTakeForm({ products, warehouses, onCancel, onSave }) {
+  const [khoId, setKhoId] = useState(warehouses?.[0]?.id || "");
+  const [ngay, setNgay] = useState(todayStr());
+  const [ghiChu, setGhiChu] = useState("");
+  const [query, setQuery] = useState("");
+  const [counts, setCounts] = useState({}); // { [productId]: thucTe }
+
+  function soSachOf(p) {
+    return khoId && p.ton_kho_theo_kho ? (p.ton_kho_theo_kho[khoId] || 0) : (p.ton_kho || 0);
+  }
+  function thucTeOf(p) {
+    const v = counts[p.id];
+    return v === undefined ? soSachOf(p) : v;
+  }
+
+  const q = query.trim().toLowerCase();
+  const filtered = products.filter((p) => !q || p.ten?.toLowerCase().includes(q) || p.ma?.toLowerCase().includes(q));
+
+  const changedLines = products
+    .map((p) => ({ p, chenh: thucTeOf(p) - soSachOf(p) }))
+    .filter((x) => x.chenh !== 0);
+
+  const [submit, busy] = useSubmitGuard(async (e) => {
+    e.preventDefault();
+    if (changedLines.length === 0) {
+      toast("Không có chênh lệch nào để cân bằng.", "info");
+      return;
+    }
+    onSave({
+      ma: uid("KK").toUpperCase(),
+      ngay,
+      kho_id: khoId || undefined,
+      kho_ten: warehouses?.find((w) => w.id === khoId)?.ten,
+      ghi_chu: ghiChu,
+      lines: changedLines.map(({ p, chenh }) => ({
+        hang_hoa_id: p.id,
+        ten: p.ten,
+        so_sach: soSachOf(p),
+        thuc_te: soSachOf(p) + chenh,
+        chenh_lech: chenh,
+        gia_von: p.gia_von || 0,
+      })),
+    });
+  });
+
+  return (
+    <Modal title="Tạo phiếu kiểm kê kho" onClose={onCancel} width="max-w-3xl">
+      <form onSubmit={submit}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
+          {warehouses?.length > 1 && (
+            <Field label="Kho / Chi nhánh" required>
+              <select required className={inputCls} style={inputStyle} value={khoId} onChange={(e) => { setKhoId(e.target.value); setCounts({}); }}>
+                {warehouses.map((w) => <option key={w.id} value={w.id}>{w.ten}</option>)}
+              </select>
+            </Field>
+          )}
+          <Field label="Ngày kiểm kê"><input type="date" className={inputCls} style={inputStyle} value={ngay} onChange={(e) => setNgay(e.target.value)} /></Field>
+        </div>
+        <Field label="Ghi chú"><input className={inputCls} style={inputStyle} value={ghiChu} onChange={(e) => setGhiChu(e.target.value)} placeholder="VD: kiểm kê định kỳ cuối tháng" /></Field>
+
+        <div className="mt-1 mb-2 flex items-center justify-between gap-2">
+          <span className="text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>
+            Nhập số lượng đếm được thực tế — chỉ dòng có chênh lệch mới được ghi nhận ({changedLines.length} dòng)
+          </span>
+        </div>
+        <Toolbar query={query} setQuery={setQuery} placeholder="Tìm hàng hóa..." />
+
+        <div className="rounded-md border overflow-hidden" style={{ borderColor: COLORS.border }}>
+          <Table
+            columns={[
+              { key: "ma", label: "Mã hàng" },
+              { key: "ten", label: "Tên hàng" },
+              { key: "so_sach", label: "Sổ sách", align: "right", sortValue: (p) => soSachOf(p), render: (p) => soSachOf(p) },
+              {
+                key: "thuc_te", label: "Thực tế", align: "right", sortable: false,
+                render: (p) => (
+                  <input
+                    type="number"
+                    className={inputCls}
+                    style={{ ...inputStyle, width: 90, textAlign: "right" }}
+                    value={thucTeOf(p)}
+                    onChange={(e) => setCounts((cur) => ({ ...cur, [p.id]: e.target.value === "" ? soSachOf(p) : Number(e.target.value) }))}
+                  />
+                ),
+              },
+              {
+                key: "chenh_lech", label: "Chênh lệch", align: "right", sortValue: (p) => thucTeOf(p) - soSachOf(p),
+                render: (p) => {
+                  const c = thucTeOf(p) - soSachOf(p);
+                  return <span style={{ color: c < 0 ? COLORS.red : c > 0 ? COLORS.green : COLORS.textMuted, fontWeight: c !== 0 ? 600 : 400 }}>{c > 0 ? "+" : ""}{c}</span>;
+                },
+              },
+            ]}
+            rows={filtered}
+            pageSize={20}
+          />
+        </div>
+
+        <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+          <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
+          <Btn type="submit" busy={busy}>Lưu & cân bằng kho ({changedLines.length})</Btn>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -3727,12 +4118,7 @@ function Dashboard({ products, customers, suppliers, sales, purchases, receipts,
   const revenueThisMonth = sales.filter((s) => monthKey(s.ngay) === thisMonth).reduce((s, i) => s + i.tong_tien, 0);
   const purchaseThisMonth = purchases.filter((s) => monthKey(s.ngay) === thisMonth).reduce((s, i) => s + i.tong_tien, 0);
 
-  const totalPhaiThu = customers.reduce((sum, c) => {
-    const banHang = sales.filter((s) => s.doi_tac_id === c.id).reduce((s, i) => s + i.tong_tien, 0);
-    const daThu = sales.filter((s) => s.doi_tac_id === c.id).reduce((s, i) => s + (i.da_thanh_toan || 0), 0) + receipts.filter((r) => r.doi_tac_id === c.id).reduce((s, i) => s + i.so_tien, 0);
-    const traHang = (salereturns || []).filter((r) => r.doi_tac_id === c.id).reduce((s, i) => s + i.tong_tien, 0);
-    return sum + Math.max((c.no_dau || 0) + banHang - daThu - traHang, 0);
-  }, 0);
+  const totalPhaiThu = customers.reduce((sum, c) => sum + Math.max(tinhConNoKhachHang(c, sales, receipts, salereturns), 0), 0);
 
   const lowStock = products.filter((p) => (p.ton_kho || 0) <= (p.ton_toi_thieu || 0));
 
@@ -4964,6 +5350,7 @@ export default function App() {
   const warehouseStore = useCollection(STORE_KEYS.warehouses);
   const einvoiceStore = useCollection(STORE_KEYS.einvoiceconfig);
   const companyStore = useCollection(STORE_KEYS.company);
+  const stocktakeStore = useCollection(STORE_KEYS.stocktakes);
   const auditLogStore = useCollection(STORE_KEYS.auditlog);
   const auditStoreRef = useRef(null);
   auditStoreRef.current = auditLogStore;
@@ -4982,7 +5369,7 @@ export default function App() {
     purchaseReturnStore.loading || priceListStore.loading || salesOrderStore.loading ||
     employeeStore.loading || payrollStore.loading || channelStore.loading ||
     paymentMethodStore.loading || auditLogStore.loading || warehouseStore.loading || einvoiceStore.loading ||
-    companyStore.loading;
+    companyStore.loading || stocktakeStore.loading;
 
   const allowedPages = auth.currentUser ? (ROLE_PAGES[auth.currentUser.role] || null) : [];
 
@@ -5057,10 +5444,12 @@ export default function App() {
         warehouses={warehouseStore.items}
         soStore={salesOrderStore}
         einvoiceStore={einvoiceStore}
+        receiptsData={receiptStore.items}
+        salereturnsData={saleReturnStore.items}
       />
     ),
     salereturns: <ReturnPage mode="sale" retStore={saleReturnStore} invStore={salesStore} partnerStore={customerStore} productStore={productStore} warehouses={warehouseStore.items} />,
-    purchases: <InvoicePage mode="purchase" invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} warehouses={warehouseStore.items} />,
+    purchases: <InvoicePage mode="purchase" invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} warehouses={warehouseStore.items} receiptsData={paymentStore.items} salereturnsData={purchaseReturnStore.items} />,
     purchasereturns: <ReturnPage mode="purchase" retStore={purchaseReturnStore} invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} warehouses={warehouseStore.items} />,
     stockin: <StockVoucherPage type="in" store={voucherStore} productStore={productStore} warehouses={warehouseStore.items} />,
     stockout: <StockVoucherPage type="out" store={voucherStore} productStore={productStore} warehouses={warehouseStore.items} />,
@@ -5082,6 +5471,7 @@ export default function App() {
       />
     ),
     stock: <StockPage products={productStore.items} warehouses={warehouseStore.items} />,
+    stocktake: <StockTakePage store={stocktakeStore} productStore={productStore} warehouses={warehouseStore.items} />,
     nxt: <NXTPage products={productStore.items} sales={salesStore.items} purchases={purchaseStore.items} salereturns={saleReturnStore.items} purchasereturns={purchaseReturnStore.items} vouchers={voucherStore.items} warehouses={warehouseStore.items} />,
     reports: <ReportsPage sales={salesStore.items} purchases={purchaseStore.items} products={productStore.items} channels={channelStore.items} warehouses={warehouseStore.items} />,
     taxreport: <TaxReportPage sales={salesStore.items} purchases={purchaseStore.items} products={productStore.items} />,
