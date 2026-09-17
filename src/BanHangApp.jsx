@@ -199,11 +199,110 @@ const STORE_KEYS = {
 // does and does not protect against.
 const SHARED = true;
 
+/* ------------------------------------------------------------------ */
+/* Đồng bộ offline — khi mất mạng, ghi dữ liệu vẫn lưu tạm trên máy      */
+/* (localStorage) và tự động gửi lên máy chủ khi có mạng trở lại.       */
+/* Mỗi khóa lưu trữ là MỘT snapshot toàn bộ danh sách, nên hàng đợi chỉ  */
+/* cần giữ giá trị mới nhất theo từng khóa — ghi sau luôn thay ghi trước.*/
+/* ------------------------------------------------------------------ */
+const LS_CACHE_PREFIX = "ntcons:cache:";
+const LS_QUEUE_KEY = "ntcons:sync-queue";
+
+function lsGet(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function lsSet(key, val) {
+  try { localStorage.setItem(key, val); } catch { /* dung lượng đầy hoặc bị chặn — bỏ qua */ }
+}
+
+function loadQueue() {
+  try { return JSON.parse(lsGet(LS_QUEUE_KEY) || "{}"); } catch { return {}; }
+}
+let SYNC_QUEUE = loadQueue(); // { [storageKey]: { value, shared, ts } }
+function persistQueue() {
+  lsSet(LS_QUEUE_KEY, JSON.stringify(SYNC_QUEUE));
+}
+
+const SYNC_LISTENERS = new Set();
+function notifySync() {
+  const count = Object.keys(SYNC_QUEUE).length;
+  SYNC_LISTENERS.forEach((fn) => fn(count));
+}
+/** Số lượng thay đổi đang chờ đồng bộ + hàm để yêu cầu đồng bộ lại ngay. */
+function useSyncQueueStatus() {
+  const [count, setCount] = useState(Object.keys(SYNC_QUEUE).length);
+  useEffect(() => {
+    SYNC_LISTENERS.add(setCount);
+    return () => SYNC_LISTENERS.delete(setCount);
+  }, []);
+  return { pending: count, syncNow: flushQueue };
+}
+
+let flushTimer = null;
+let flushing = false;
+async function flushQueue() {
+  if (flushing) return;
+  const keys = Object.keys(SYNC_QUEUE);
+  if (keys.length === 0) return;
+  flushing = true;
+  let okCount = 0;
+  for (const key of keys) {
+    const entry = SYNC_QUEUE[key];
+    if (!entry) continue;
+    try {
+      await window.storage.set(key, JSON.stringify(entry.value), entry.shared);
+      delete SYNC_QUEUE[key];
+      okCount++;
+    } catch (e) {
+      // vẫn chưa có mạng / máy chủ chưa phản hồi — giữ lại trong hàng đợi
+    }
+  }
+  persistQueue();
+  notifySync();
+  flushing = false;
+  if (okCount > 0) {
+    toast(Object.keys(SYNC_QUEUE).length === 0 ? `Đã đồng bộ xong ${okCount} thay đổi bị trễ.` : `Đã đồng bộ ${okCount} thay đổi, còn ${Object.keys(SYNC_QUEUE).length} đang chờ.`);
+  }
+  scheduleFlush();
+}
+function scheduleFlush() {
+  clearTimeout(flushTimer);
+  if (Object.keys(SYNC_QUEUE).length === 0) return;
+  flushTimer = setTimeout(flushQueue, 15000); // thử lại định kỳ mỗi 15 giây khi còn hàng đợi
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("online", () => flushQueue());
+  if (Object.keys(SYNC_QUEUE).length > 0) setTimeout(flushQueue, 1500);
+}
+
+function SyncQueueBanner() {
+  const { pending, syncNow } = useSyncQueueStatus();
+  if (pending === 0) return null;
+  return (
+    <div className="flex items-center gap-1.5 text-[12.5px] px-2 py-1 rounded-md no-print" style={{ background: COLORS.goldBg, color: "#5C4109" }} aria-live="polite">
+      <AlertTriangle size={13} />
+      <span className="hidden sm:inline">{pending} thay đổi chưa đồng bộ</span>
+      <span className="sm:hidden">{pending} chưa đồng bộ</span>
+      <button onClick={syncNow} className="underline font-medium">Đồng bộ ngay</button>
+    </div>
+  );
+}
+
 async function storageGet(key, shared = SHARED) {
   try {
     const res = await window.storage.get(key, shared);
-    return res ? JSON.parse(res.value) : null;
+    const value = res ? JSON.parse(res.value) : null;
+    if (res) lsSet(LS_CACHE_PREFIX + key, res.value);
+    // Nếu có thay đổi chưa kịp đồng bộ cho khóa này, ưu tiên hiển thị bản đó
+    // (mới hơn những gì vừa tải từ máy chủ) thay vì để mất khi tải lại trang.
+    if (SYNC_QUEUE[key]) return SYNC_QUEUE[key].value;
+    return value;
   } catch (e) {
+    if (SYNC_QUEUE[key]) return SYNC_QUEUE[key].value;
+    const cached = lsGet(LS_CACHE_PREFIX + key);
+    if (cached) {
+      try { return JSON.parse(cached); } catch { return null; }
+    }
     return null;
   }
 }
@@ -274,14 +373,31 @@ function useSavingIndicator() {
   return saving;
 }
 
+let wasOffline = false;
 async function storageSet(key, value, shared = SHARED) {
   SAVING_COUNT += 1;
   notifySaving();
+  // Ghi cache local ngay lập tức để lần đọc kế tiếp (kể cả khi mất mạng) thấy đúng dữ liệu mới nhất.
+  lsSet(LS_CACHE_PREFIX + key, JSON.stringify(value));
   try {
     await window.storage.set(key, JSON.stringify(value), shared);
+    delete SYNC_QUEUE[key];
+    persistQueue();
+    notifySync();
+    if (wasOffline) {
+      wasOffline = false;
+      toast("Đã có mạng trở lại — dữ liệu đang được đồng bộ.");
+    }
   } catch (e) {
     console.error("storage set failed", key, e);
-    toast("Không lưu được lên máy chủ — dữ liệu đang giữ tạm trên máy này.", "error");
+    SYNC_QUEUE[key] = { value, shared, ts: Date.now() };
+    persistQueue();
+    notifySync();
+    if (!wasOffline) {
+      wasOffline = true;
+      toast("Mất kết nối máy chủ — thay đổi đang được giữ trên máy và sẽ tự đồng bộ khi có mạng lại.", "error");
+    }
+    scheduleFlush();
   } finally {
     SAVING_COUNT = Math.max(0, SAVING_COUNT - 1);
     notifySaving();
@@ -2107,7 +2223,7 @@ function EInvoiceSettingsPage({ store }) {
 /* ------------------------------------------------------------------ */
 /* Invoices: Bán hàng / Mua hàng                                       */
 /* ------------------------------------------------------------------ */
-function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, channels, soStore, warehouses, einvoiceStore, receiptsData, salereturnsData }) {
+function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, channels, soStore, warehouses, einvoiceStore, receiptsData, salereturnsData, paymentMethods }) {
   // mode: 'sale' | 'purchase'
   const isSale = mode === "sale";
   const { items: invoices, add: addInv, remove: removeInv } = invStore;
@@ -2248,6 +2364,7 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
           existingInvoices={invoices}
           receiptsData={receiptsData}
           salereturnsData={salereturnsData}
+          paymentMethods={paymentMethods}
         />
       )}
       {viewing && (
@@ -2281,6 +2398,11 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
               <div className="text-[13px]" style={{ color: COLORS.textMuted }}>Thuế GTGT: {fmtVND(vatOf(viewing))}</div>
             )}
             <div className="text-[14px] font-semibold" style={{ color: COLORS.text }}>Tổng thanh toán: {fmtVND(totalOf(viewing))}</div>
+            {viewing.thanh_toan_chi_tiet?.length > 0 && (
+              <div className="text-[12px] mt-1" style={{ color: COLORS.textMuted }}>
+                Đã thu: {viewing.thanh_toan_chi_tiet.map((r) => `${r.ten} ${fmtVND(r.so_tien)}`).join(" · ")}
+              </div>
+            )}
           </div>
         </Modal>
       )}
@@ -2314,14 +2436,15 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
   );
 }
 
-function InvoiceForm({ mode, partners, products, priceLists, channels, warehouses, onCancel, onSave, initialDoc, existingInvoices, receiptsData, salereturnsData }) {
+function InvoiceForm({ mode, partners, products, priceLists, channels, warehouses, onCancel, onSave, initialDoc, existingInvoices, receiptsData, salereturnsData, paymentMethods }) {
   const isSale = mode === "sale";
   const [doiTacId, setDoiTacId] = useState(initialDoc?.doi_tac_id || partners[0]?.id || "");
   const [kenhId, setKenhId] = useState(initialDoc?.kenh_id || "");
   const [khoId, setKhoId] = useState(initialDoc?.kho_id || warehouses?.[0]?.id || "");
   const [ngay, setNgay] = useState(todayStr());
   const [lines, setLines] = useState(initialDoc?.items?.length ? initialDoc.items.map((l) => ({ ...l })) : [{ hang_hoa_id: "", so_luong: 1, don_gia: 0 }]);
-  const [daThanhToan, setDaThanhToan] = useState(0);
+  const [paymentRows, setPaymentRows] = useState([{ phuong_thuc_id: paymentMethods?.[0]?.id || "", so_tien: 0 }]);
+  const daThanhToan = paymentRows.reduce((s, r) => s + (Number(r.so_tien) || 0), 0);
 
   const customer = isSale ? partners.find((p) => p.id === doiTacId) : null;
   const chietKhauPct = customer?.chiet_khau_pct || 0;
@@ -2418,7 +2541,10 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, warehouse
       chiet_khau_pct: isSale ? chietKhauPct : 0,
       thue_gtgt: vatAmount,
       tong_tien: total,
-      da_thanh_toan: Number(daThanhToan) || 0,
+      da_thanh_toan: daThanhToan,
+      thanh_toan_chi_tiet: paymentRows
+        .filter((r) => (Number(r.so_tien) || 0) > 0)
+        .map((r) => ({ phuong_thuc_id: r.phuong_thuc_id, ten: (paymentMethods || []).find((m) => m.id === r.phuong_thuc_id)?.ten || "Tiền mặt", so_tien: Number(r.so_tien) || 0 })),
       don_dat_hang_id: initialDoc?.id,
     });
   }
@@ -2512,7 +2638,9 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, warehouse
         </button>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 mt-4">
-          <Field label="Đã thanh toán ngay"><input type="number" min="0" className={inputCls} style={inputStyle} value={daThanhToan} onChange={(e) => setDaThanhToan(e.target.value)} /></Field>
+          <Field label="Đã thanh toán ngay">
+            <SplitPaymentEditor methods={paymentMethods} rows={paymentRows} setRows={setPaymentRows} autoTotal={grandTotal} />
+          </Field>
           <div className="flex flex-col items-end justify-center pt-2">
             {isSale && discountAmount > 0 && (
               <>
@@ -2755,7 +2883,7 @@ function SalesOrderForm({ partners, products, priceLists, channels, onSave, onCa
 /* ------------------------------------------------------------------ */
 /* Bán hàng nhanh (POS)                                                */
 /* ------------------------------------------------------------------ */
-function POSPage({ products, customers, priceLists, channels, warehouses, salesStore, productStore }) {
+function POSPage({ products, customers, priceLists, channels, warehouses, salesStore, productStore, paymentMethods }) {
   const { add: addSale } = salesStore;
   const { setItems: setProducts } = productStore;
   const [cart, setCart] = useState([]); // [{ hang_hoa_id, ten, so_luong, don_gia, dvt }]
@@ -2763,9 +2891,10 @@ function POSPage({ products, customers, priceLists, channels, warehouses, salesS
   const [khoId, setKhoId] = useState(warehouses?.[0]?.id || "");
   const [search, setSearch] = useState("");
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [tienKhachDua, setTienKhachDua] = useState("");
+  const [paymentRows, setPaymentRows] = useState([{ phuong_thuc_id: paymentMethods?.[0]?.id || "", so_tien: 0 }]);
   const [lastReceipt, setLastReceipt] = useState(null);
   const [scanError, setScanError] = useState("");
+  const searchRef = useRef(null);
 
   const customer = customers.find((c) => c.id === customerId);
   const priceList = customer?.bang_gia_id ? (priceLists || []).find((pl) => pl.id === customer.bang_gia_id) : null;
@@ -2801,7 +2930,8 @@ function POSPage({ products, customers, priceLists, channels, warehouses, salesS
   const subtotal = cart.reduce((s, l) => s + l.so_luong * l.don_gia, 0);
   const discountAmount = subtotal * (chietKhauPct / 100);
   const total = subtotal - discountAmount;
-  const tienThua = Math.max(0, (Number(tienKhachDua) || 0) - total);
+  const sumPaid = paymentRows.reduce((s, r) => s + (Number(r.so_tien) || 0), 0);
+  const tienThua = Math.max(0, sumPaid - total);
 
   function findByCode(code) {
     const c = (code || "").trim();
@@ -2830,6 +2960,20 @@ function POSPage({ products, customers, priceLists, channels, warehouses, salesS
   function checkout() {
     if (cart.length === 0) return;
     const items = cart.map((l) => ({ hang_hoa_id: l.hang_hoa_id, ten: l.ten, so_luong: l.so_luong, don_gia: l.don_gia }));
+    // POS luôn coi là thanh toán đủ ngay lúc bán; nếu khách đưa dư (để lấy tiền
+    // thối), phần dư đó không tính vào doanh thu/tiền mặt thực nhận — trừ bớt
+    // vào dòng cuối cùng trước khi lưu.
+    let remainingToStrip = tienThua;
+    const normalizedRows = [...paymentRows].reverse().map((r) => {
+      let amt = Number(r.so_tien) || 0;
+      if (remainingToStrip > 0) {
+        const cut = Math.min(remainingToStrip, amt);
+        amt -= cut;
+        remainingToStrip -= cut;
+      }
+      return { ...r, so_tien: amt };
+    }).reverse().filter((r) => r.so_tien > 0);
+
     const invoice = {
       id: uid("HD"),
       ma: uid("HD").toUpperCase(),
@@ -2841,6 +2985,7 @@ function POSPage({ products, customers, priceLists, channels, warehouses, salesS
       chiet_khau_pct: chietKhauPct,
       tong_tien: total,
       da_thanh_toan: total, // POS = thanh toán ngay khi checkout
+      thanh_toan_chi_tiet: normalizedRows.map((r) => ({ phuong_thuc_id: r.phuong_thuc_id, ten: (paymentMethods || []).find((m) => m.id === r.phuong_thuc_id)?.ten || "Tiền mặt", so_tien: r.so_tien })),
     };
     addSale(invoice);
     setProducts((cur) => {
@@ -2854,7 +2999,7 @@ function POSPage({ products, customers, priceLists, channels, warehouses, salesS
     });
     setLastReceipt(invoice);
     setCart([]);
-    setTienKhachDua("");
+    setPaymentRows([{ phuong_thuc_id: paymentMethods?.[0]?.id || "", so_tien: 0 }]);
     setCustomerId("");
   }
 
@@ -2862,11 +3007,32 @@ function POSPage({ products, customers, priceLists, channels, warehouses, salesS
     (p) => !search || p.ten?.toLowerCase().includes(search.toLowerCase()) || p.ma?.toLowerCase().includes(search.toLowerCase()) || p.ma_vach?.includes(search)
   );
 
+  // Phím tắt: F3 focus ô tìm/quét, F9 thanh toán, Esc xóa ô tìm kiếm.
+  // Bỏ qua khi đang mở modal quét mã vạch hoặc xem hóa đơn vừa in.
+  useEffect(() => {
+    function onKey(e) {
+      if (scannerOpen || lastReceipt) return;
+      if (e.key === "F3") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      } else if (e.key === "F9") {
+        e.preventDefault();
+        if (cart.length > 0) checkout();
+      } else if (e.key === "Escape" && document.activeElement === searchRef.current) {
+        setSearch("");
+        setScanError("");
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [scannerOpen, lastReceipt, cart, paymentRows, customerId, khoId]);
+
   return (
     <div>
       <PageHeader
         title="Bán hàng nhanh"
-        subtitle="Chọn hàng hoặc quét mã vạch để thêm vào giỏ, thanh toán ngay tại quầy"
+        subtitle="Chọn hàng hoặc quét mã vạch để thêm vào giỏ, thanh toán ngay tại quầy · Phím tắt: F3 tìm hàng, F9 thanh toán"
         action={<Btn variant="outline" onClick={() => setScannerOpen(true)}><ScanLine size={15} /> Quét mã vạch</Btn>}
       />
 
@@ -2874,11 +3040,12 @@ function POSPage({ products, customers, priceLists, channels, warehouses, salesS
         <div className="lg:col-span-2">
           <div className="relative mb-1">
             <input
+              ref={searchRef}
               autoFocus
               value={search}
               onChange={(e) => { setSearch(e.target.value); setScanError(""); }}
               onKeyDown={handleSearchEnter}
-              placeholder="Gõ tên/mã hàng để lọc, hoặc quét/gõ mã vạch rồi Enter..."
+              placeholder="Gõ tên/mã hàng để lọc, hoặc quét/gõ mã vạch rồi Enter... (F3)"
               className={inputCls}
               style={inputStyle}
             />
@@ -2963,14 +3130,14 @@ function POSPage({ products, customers, priceLists, channels, warehouses, salesS
             <span style={{ color: COLORS.text }}>Tổng cộng</span>
             <span style={{ color: COLORS.navy }}>{fmtVND(total)}</span>
           </div>
-          <Field label="Tiền khách đưa">
-            <input type="number" min="0" className={inputCls} style={inputStyle} value={tienKhachDua} onChange={(e) => setTienKhachDua(e.target.value)} />
+          <Field label="Khách thanh toán">
+            <SplitPaymentEditor methods={paymentMethods} rows={paymentRows} setRows={setPaymentRows} autoTotal={total} />
           </Field>
           <div className="flex justify-between text-[13px] mb-3">
-            <span style={{ color: COLORS.textMuted }}>Tiền thừa</span>
+            <span style={{ color: COLORS.textMuted }}>Tiền thừa trả khách</span>
             <span style={{ color: COLORS.green, fontWeight: 600 }}>{fmtVND(tienThua)}</span>
           </div>
-          <Btn onClick={checkout} disabled={cart.length === 0} className="w-full justify-center">Thanh toán</Btn>
+          <Btn onClick={checkout} disabled={cart.length === 0} className="w-full justify-center">Thanh toán (F9)</Btn>
         </div>
       </div>
 
@@ -3386,6 +3553,67 @@ function CashVoucherForm({ isThu, partners, paymentMethods, onSave, onCancel }) 
 /* ------------------------------------------------------------------ */
 /* Phương thức thanh toán                                              */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Thanh toán nhiều phương thức trên một chứng từ — dùng ở đơn bán/mua  */
+/* và POS. rows: [{ phuong_thuc_id, ten, so_tien }]                     */
+/* ------------------------------------------------------------------ */
+function SplitPaymentEditor({ methods, rows, setRows, autoTotal }) {
+  const sum = rows.reduce((s, r) => s + (Number(r.so_tien) || 0), 0);
+  const options = methods && methods.length > 0 ? methods : [{ id: "", ten: "Tiền mặt" }];
+
+  function addRow() {
+    const used = new Set(rows.map((r) => r.phuong_thuc_id));
+    const next = options.find((m) => !used.has(m.id)) || options[0];
+    setRows([...rows, { phuong_thuc_id: next?.id || "", so_tien: 0 }]);
+  }
+  function updateRow(i, patch) {
+    setRows(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+  function removeRow(i) {
+    setRows(rows.filter((_, idx) => idx !== i));
+  }
+
+  return (
+    <div>
+      {rows.map((r, i) => (
+        <div key={i} className="flex items-center gap-1.5 mb-1.5">
+          <select
+            className={inputCls}
+            style={{ ...inputStyle, flex: 1 }}
+            value={r.phuong_thuc_id}
+            onChange={(e) => updateRow(i, { phuong_thuc_id: e.target.value })}
+          >
+            {options.map((m) => <option key={m.id || "cash"} value={m.id}>{m.ten}</option>)}
+          </select>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            style={{ ...inputStyle, width: 130 }}
+            value={r.so_tien}
+            onChange={(e) => updateRow(i, { so_tien: e.target.value })}
+          />
+          {rows.length > 1 && (
+            <button type="button" onClick={() => removeRow(i)} className="p-1 rounded hover:bg-slate-100 shrink-0" aria-label="Bỏ phương thức này">
+              <X size={14} color={COLORS.red} />
+            </button>
+          )}
+        </div>
+      ))}
+      <div className="flex items-center justify-between">
+        <button type="button" onClick={addRow} className="text-[12px] font-medium underline" style={{ color: COLORS.navy }}>
+          + Thêm phương thức thanh toán
+        </button>
+        {rows.length > 1 && (
+          <span className="text-[12px]" style={{ color: COLORS.textMuted }}>
+            Tổng: <b style={{ color: COLORS.text }}>{fmtVND(sum)}</b>{autoTotal != null && sum !== autoTotal ? ` (chênh ${fmtVND(sum - autoTotal)})` : ""}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PaymentMethodsPage({ store }) {
   const { items, add, update, remove } = store;
   const [editing, setEditing] = useState(null);
@@ -5805,6 +6033,7 @@ export default function App() {
         warehouses={warehouseStore.items}
         salesStore={salesStore}
         productStore={productStore}
+        paymentMethods={paymentMethodStore.items}
       />
     ),
     salesorders: (
@@ -5831,10 +6060,11 @@ export default function App() {
         einvoiceStore={einvoiceStore}
         receiptsData={receiptStore.items}
         salereturnsData={saleReturnStore.items}
+        paymentMethods={paymentMethodStore.items}
       />
     ),
     salereturns: <ReturnPage mode="sale" retStore={saleReturnStore} invStore={salesStore} partnerStore={customerStore} productStore={productStore} warehouses={warehouseStore.items} />,
-    purchases: <InvoicePage mode="purchase" invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} warehouses={warehouseStore.items} receiptsData={paymentStore.items} salereturnsData={purchaseReturnStore.items} />,
+    purchases: <InvoicePage mode="purchase" invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} warehouses={warehouseStore.items} receiptsData={paymentStore.items} salereturnsData={purchaseReturnStore.items} paymentMethods={paymentMethodStore.items} />,
     purchasereturns: <ReturnPage mode="purchase" retStore={purchaseReturnStore} invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} warehouses={warehouseStore.items} />,
     stockin: <StockVoucherPage type="in" store={voucherStore} productStore={productStore} warehouses={warehouseStore.items} />,
     stockout: <StockVoucherPage type="out" store={voucherStore} productStore={productStore} warehouses={warehouseStore.items} />,
@@ -5906,6 +6136,7 @@ export default function App() {
           <ChevronRight size={13} color={COLORS.textMuted} className="hidden sm:inline" />
           <span className="text-[13.5px] font-medium truncate" style={{ color: COLORS.text }}>{currentLabel}</span>
           <div className="ml-auto flex items-center gap-3">
+            <SyncQueueBanner />
             <SavingIndicator />
             <NotificationsBell notifications={notifications} onNavigate={setPage} />
           </div>
