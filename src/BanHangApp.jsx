@@ -181,6 +181,8 @@ const STORE_KEYS = {
   users: "ntcons:users",
   pricelists: "ntcons:pricelists",
   salesorders: "ntcons:salesorders",
+  purchaseorders: "ntcons:purchaseorders",
+  lots: "ntcons:lots",
   employees: "ntcons:employees",
   payroll: "ntcons:payroll",
   channels: "ntcons:channels",
@@ -411,12 +413,13 @@ const STORE_LABELS = {
   products: "Hàng hóa", customers: "Khách hàng", suppliers: "Nhà cung cấp",
   sales: "Bán hàng", purchases: "Mua hàng", receipts: "Phiếu thu", payments: "Phiếu chi",
   vouchers: "Phiếu kho (Nhập/Xuất)", salereturns: "Trả hàng bán", purchasereturns: "Trả hàng mua",
-  pricelists: "Bảng giá", salesorders: "Đơn đặt hàng", employees: "Nhân viên", payroll: "Bảng lương",
+  pricelists: "Bảng giá", salesorders: "Đơn đặt hàng", purchaseorders: "Đơn đặt hàng mua", employees: "Nhân viên", payroll: "Bảng lương",
   channels: "Kênh bán hàng", paymentmethods: "Phương thức thanh toán", users: "Người dùng (tài khoản)",
   warehouses: "Kho / Chi nhánh",
   einvoiceconfig: "Cấu hình hóa đơn điện tử",
   company: "Thông tin công ty",
   stocktakes: "Kiểm kê kho",
+  lots: "Lô hàng / Serial",
 };
 const STORE_KEY_TO_LABEL = Object.fromEntries(
   Object.entries(STORE_KEYS).map(([short, full]) => [full, STORE_LABELS[short] || short])
@@ -775,6 +778,7 @@ const NAV_GROUPS = [
       { key: "sales", label: "Bán hàng", icon: ShoppingCart },
       { key: "salereturns", label: "Trả hàng bán", icon: Undo2 },
       { key: "purchases", label: "Mua hàng", icon: ShoppingBag },
+      { key: "purchaseorders", label: "Đơn đặt hàng mua", icon: ClipboardList },
       { key: "purchasereturns", label: "Trả hàng mua", icon: Undo2 },
       { key: "stockin", label: "Nhập kho", icon: ArrowDownToLine },
       { key: "stockout", label: "Xuất kho", icon: ArrowUpFromLine },
@@ -802,6 +806,7 @@ const NAV_GROUPS = [
     items: [
       { key: "stock", label: "Tồn kho", icon: Boxes },
       { key: "stocktake", label: "Kiểm kê kho", icon: ClipboardList },
+      { key: "lots", label: "Lô hàng / Serial", icon: Tag },
       { key: "nxt", label: "Nhập - Xuất - Tồn", icon: Boxes },
       { key: "reports", label: "Báo cáo", icon: FileBarChart },
       { key: "taxreport", label: "Báo cáo thuế", icon: Landmark },
@@ -837,7 +842,7 @@ const ROLE_PAGES = {
   admin: null, // null = all pages
   sales: ["dashboard", "products", "customers", "pos", "salesorders", "sales", "salereturns", "stock", "pricelists", "channels"],
   accountant: ["dashboard", "customers", "suppliers", "receipts", "payments", "soquy", "debt", "reports", "taxreport", "employees", "payroll", "pricelists", "paymentmethods", "nxt"],
-  warehouse: ["dashboard", "products", "stockin", "stockout", "stocktransfer", "stock", "stocktake", "nxt", "warehouses"],
+  warehouse: ["dashboard", "products", "stockin", "stockout", "stocktransfer", "stock", "stocktake", "lots", "nxt", "warehouses"],
 };
 
 function Sidebar({ page, setPage, collapsed, setCollapsed, allowedPages, user, onLogout, mobileOpen, onCloseMobile }) {
@@ -1603,6 +1608,7 @@ function ProductForm({ initial, warehouses, allProducts, onSave, onCancel }) {
     ton_kho: initial.ton_kho ?? 0,
     ton_toi_thieu: initial.ton_toi_thieu ?? 0,
     thue_suat_vat: initial.thue_suat_vat ?? 10,
+    quan_ly_ton_kho: initial.quan_ly_ton_kho || "thuong",
     id: initial.id,
   });
   const [donViQuyDoi, setDonViQuyDoi] = useState(initial.don_vi_quy_doi || []);
@@ -1672,6 +1678,19 @@ function ProductForm({ initial, warehouses, allProducts, onSave, onCancel }) {
         <Field label="Tồn tối thiểu (cảnh báo)"><input type="number" className={inputCls} style={inputStyle} value={f.ton_toi_thieu} onChange={(e) => setF({ ...f, ton_toi_thieu: +e.target.value })} /></Field>
       </div>
       <Field label="Thuế suất GTGT (%)"><input type="number" min="0" max="100" className={inputCls} style={{ ...inputStyle, width: 120 }} value={f.thue_suat_vat} onChange={(e) => setF({ ...f, thue_suat_vat: +e.target.value })} /></Field>
+
+      <Field label="Quản lý tồn kho theo">
+        <select className={inputCls} style={inputStyle} value={f.quan_ly_ton_kho} onChange={(e) => setF({ ...f, quan_ly_ton_kho: e.target.value })}>
+          <option value="thuong">Hàng thường (không theo lô)</option>
+          <option value="lo_han_dung">Lô + Hạn sử dụng</option>
+          <option value="serial">Số serial / IMEI (từng cái riêng)</option>
+        </select>
+        {f.quan_ly_ton_kho !== "thuong" && (
+          <div className="text-[11.5px] mt-1" style={{ color: COLORS.textMuted }}>
+            Khi nhập/xuất hàng này, hệ thống sẽ yêu cầu {f.quan_ly_ton_kho === "serial" ? "nhập số serial/IMEI" : "khai số lô và hạn sử dụng"}.
+          </div>
+        )}
+      </Field>
 
       <div className="mt-2 mb-2 text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>Đơn vị tính quy đổi (tùy chọn — VD: 1 Thùng = 12 {f.dvt || "Cái"})</div>
       {donViQuyDoi.length > 0 && (
@@ -2140,8 +2159,64 @@ function weightedAvgCost(oldQty, oldCost, addQty, addCost) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Công nợ — hàm dùng chung cho Dashboard, Công nợ, và cảnh báo hạn mức */
+/* Lô hàng / Serial — phân bổ khi bán ra theo nguyên tắc hết hạn trước   */
+/* xuất trước (FEFO) cho hàng theo lô, hoặc nhập trước xuất trước cho    */
+/* hàng theo serial (vì serial không có hạn dùng để so sánh).           */
 /* ------------------------------------------------------------------ */
+function availableLotsFor(lots, productId, khoId) {
+  return (lots || [])
+    .filter((l) => l.hang_hoa_id === productId && (l.so_luong || 0) > 0 && (!khoId || !l.kho_id || l.kho_id === khoId))
+    .sort((a, b) => {
+      // Có hạn dùng: hết hạn trước lên trước (FEFO). Không có hạn dùng: nhập trước lên trước (FIFO).
+      if (a.han_su_dung && b.han_su_dung) return a.han_su_dung.localeCompare(b.han_su_dung);
+      if (a.han_su_dung) return -1;
+      if (b.han_su_dung) return 1;
+      return (a.ngay_nhap || "").localeCompare(b.ngay_nhap || "");
+    });
+}
+
+/** Trả về { allocations: [{lot_id, ma_lo, so_luong}], shortfall } — shortfall > 0 nếu không đủ lô để xuất. */
+function phanBoLoHang(lots, productId, khoId, soLuongCan) {
+  const avail = availableLotsFor(lots, productId, khoId);
+  let remaining = soLuongCan;
+  const allocations = [];
+  for (const lot of avail) {
+    if (remaining <= 0) break;
+    const take = Math.min(lot.so_luong, remaining);
+    if (take > 0) {
+      allocations.push({ lot_id: lot.id, ma_lo: lot.ma_lo, han_su_dung: lot.han_su_dung, so_luong: take });
+      remaining -= take;
+    }
+  }
+  return { allocations, shortfall: Math.max(0, remaining) };
+}
+
+function tongTonTheoLo(lots, productId, khoId) {
+  return availableLotsFor(lots, productId, khoId).reduce((s, l) => s + (l.so_luong || 0), 0);
+}
+
+/** Áp dụng thay đổi lô khi lưu một chứng từ mua/bán — trả về mảng lots mới.
+    Mua: tạo bản ghi lô mới (1 bản ghi cho lô có hạn dùng, hoặc 1 bản ghi/serial).
+    Bán: trừ dần vào các lô đã chốt phân bổ (lo_phan_bo) lúc lập chứng từ, dọn lô về 0. */
+function applyLotChanges(lots, isSale, items, khoId) {
+  let next = [...(lots || [])];
+  items.forEach((it) => {
+    if (!isSale) {
+      if (it.serials?.length) {
+        it.serials.forEach((sn) => {
+          next.push({ id: uid("LOT"), hang_hoa_id: it.hang_hoa_id, ma_lo: sn, han_su_dung: undefined, so_luong: 1, kho_id: khoId, ngay_nhap: todayStr() });
+        });
+      } else if (it.ma_lo) {
+        next.push({ id: uid("LOT"), hang_hoa_id: it.hang_hoa_id, ma_lo: it.ma_lo, han_su_dung: it.han_su_dung || undefined, so_luong: it.so_luong, kho_id: khoId, ngay_nhap: todayStr() });
+      }
+    } else {
+      (it.lo_phan_bo || []).forEach((alloc) => {
+        next = next.map((l) => (l.id === alloc.lot_id ? { ...l, so_luong: Math.max(0, (l.so_luong || 0) - alloc.so_luong) } : l));
+      });
+    }
+  });
+  return next.filter((l) => (l.so_luong || 0) > 0);
+}
 /** Tổng tiền phải thu/trả của MỘT chứng từ, đã gồm thuế GTGT nếu có. */
 function invoiceGrandTotal(inv) {
   return (inv?.tong_tien || 0) + (inv?.thue_gtgt || 0);
@@ -2384,7 +2459,7 @@ function EInvoiceSettingsPage({ store }) {
 /* ------------------------------------------------------------------ */
 /* Invoices: Bán hàng / Mua hàng                                       */
 /* ------------------------------------------------------------------ */
-function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, channels, soStore, warehouses, einvoiceStore, receiptsData, salereturnsData, paymentMethods }) {
+function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, channels, soStore, warehouses, einvoiceStore, receiptsData, salereturnsData, paymentMethods, lotStore }) {
   // mode: 'sale' | 'purchase'
   const isSale = mode === "sale";
   const { items: invoices, add: addInv, remove: removeInv } = invStore;
@@ -2453,6 +2528,10 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
       storageSet(STORE_KEYS.products, next);
       return next;
     });
+    if (lotStore) {
+      const nextLots = applyLotChanges(lotStore.items, isSale, form.items, form.kho_id);
+      lotStore.persist(nextLots, "update", { silent: true });
+    }
     // mark the source sales order as invoiced, if converted from one
     if (form.don_dat_hang_id && soStore) {
       soStore.update(form.don_dat_hang_id, { trang_thai: "invoiced" });
@@ -2526,6 +2605,7 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
           receiptsData={receiptsData}
           salereturnsData={salereturnsData}
           paymentMethods={paymentMethods}
+          lots={lotStore?.items}
         />
       )}
       {viewing && (
@@ -2597,7 +2677,77 @@ function InvoicePage({ mode, invStore, partnerStore, productStore, priceLists, c
   );
 }
 
-function InvoiceForm({ mode, partners, products, priceLists, channels, warehouses, onCancel, onSave, initialDoc, existingInvoices, receiptsData, salereturnsData, paymentMethods }) {
+/**
+ * Khối khai báo lô/serial cho một dòng hàng hóa trong đơn mua/bán.
+ * Mua hàng: nhập tay số lô + hạn dùng, hoặc danh sách serial (mỗi dòng một serial).
+ * Bán hàng: chỉ hiển thị xem trước lô sẽ được xuất (tự động chọn theo FEFO/FIFO).
+ */
+function LotLineFields({ mode, product, line, baseQty, khoId, lots, onChange }) {
+  const isSale = mode === "sale";
+  const isSerial = product.quan_ly_ton_kho === "serial";
+
+  if (!isSale) {
+    if (isSerial) {
+      const serials = (line.serials || "").split("\n").map((s) => s.trim()).filter(Boolean);
+      const mismatch = serials.length !== baseQty;
+      return (
+        <div className="mt-1.5 pl-1">
+          <div className="text-[11.5px] font-medium mb-1" style={{ color: COLORS.textMuted }}>
+            Danh sách serial/IMEI (mỗi dòng một mã — cần đúng {baseQty} mã)
+          </div>
+          <textarea
+            rows={Math.min(5, Math.max(2, baseQty))}
+            className={inputCls}
+            style={{ ...inputStyle, width: "100%", fontFamily: "monospace", fontSize: 12.5, ...(mismatch ? { borderColor: COLORS.red } : {}) }}
+            value={line.serials || ""}
+            onChange={(e) => onChange({ serials: e.target.value })}
+            placeholder={"VD:\n356789123456780\n356789123456781"}
+          />
+          <div className="text-[11px] mt-0.5" style={{ color: mismatch ? COLORS.red : COLORS.textMuted }}>
+            Đã nhập {serials.length}/{baseQty} serial
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="mt-1.5 pl-1 flex items-center gap-2">
+        <input
+          className={inputCls}
+          style={{ ...inputStyle, width: 160, ...(!line.ma_lo?.trim() ? { borderColor: COLORS.amber } : {}) }}
+          placeholder="Số lô"
+          value={line.ma_lo || ""}
+          onChange={(e) => onChange({ ma_lo: e.target.value })}
+        />
+        <input
+          type="date"
+          className={inputCls}
+          style={{ ...inputStyle, width: 160 }}
+          value={line.han_su_dung || ""}
+          onChange={(e) => onChange({ han_su_dung: e.target.value })}
+        />
+        <span className="text-[11px]" style={{ color: COLORS.textMuted }}>Số lô + hạn sử dụng (hạn dùng có thể để trống)</span>
+      </div>
+    );
+  }
+
+  // Bán hàng: xem trước lô sẽ xuất, tự động chọn theo hết-hạn-trước / nhập-trước.
+  if (!product.id || !baseQty) return null;
+  const { allocations, shortfall } = phanBoLoHang(lots, product.id, khoId, baseQty);
+  return (
+    <div className="mt-1.5 pl-1 text-[11.5px]" style={{ color: COLORS.textMuted }}>
+      {allocations.length === 0 && shortfall > 0 ? (
+        <span style={{ color: COLORS.red }}>Không còn lô/serial nào tồn cho mặt hàng này.</span>
+      ) : (
+        <span>
+          Xuất từ: {allocations.map((a) => `${a.ma_lo}${a.han_su_dung ? ` (HSD ${fmtDate(a.han_su_dung)})` : ""} ×${a.so_luong}`).join(", ")}
+          {shortfall > 0 && <span style={{ color: COLORS.red }}> — thiếu {shortfall} {product.dvt}</span>}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function InvoiceForm({ mode, partners, products, priceLists, channels, warehouses, onCancel, onSave, initialDoc, existingInvoices, receiptsData, salereturnsData, paymentMethods, lots }) {
   const isSale = mode === "sale";
   const [doiTacId, setDoiTacId] = useState(initialDoc?.doi_tac_id || partners[0]?.id || "");
   const [kenhId, setKenhId] = useState(initialDoc?.kenh_id || "");
@@ -2635,6 +2785,26 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, warehouse
     const tyLe = unitsFor(l.hang_hoa_id)[l.don_vi_idx || 0]?.ty_le || 1;
     const available = khoId && product.ton_kho_theo_kho ? (product.ton_kho_theo_kho[khoId] || 0) : (product.ton_kho || 0);
     return (Number(l.so_luong) || 0) * tyLe > available;
+  });
+
+  // Hàng theo lô/serial: khi bán, kiểm tra đủ lô để phân bổ (FEFO/FIFO); khi mua, cần khai số lô/serial.
+  const hasLotShortage = isSale && lines.some((l) => {
+    const product = products.find((p) => p.id === l.hang_hoa_id);
+    if (!product || product.quan_ly_ton_kho === "thuong" || !product.quan_ly_ton_kho) return false;
+    const tyLe = unitsFor(l.hang_hoa_id)[l.don_vi_idx || 0]?.ty_le || 1;
+    const baseQty = (Number(l.so_luong) || 0) * tyLe;
+    return phanBoLoHang(lots, l.hang_hoa_id, khoId, baseQty).shortfall > 0;
+  });
+  const missingLotInfo = !isSale && lines.some((l) => {
+    const product = products.find((p) => p.id === l.hang_hoa_id);
+    if (!product || product.quan_ly_ton_kho === "thuong" || !product.quan_ly_ton_kho) return false;
+    if (product.quan_ly_ton_kho === "serial") {
+      const tyLe = unitsFor(l.hang_hoa_id)[l.don_vi_idx || 0]?.ty_le || 1;
+      const baseQty = (Number(l.so_luong) || 0) * tyLe;
+      const serials = (l.serials || "").split("\n").map((s) => s.trim()).filter(Boolean);
+      return serials.length !== baseQty;
+    }
+    return !l.ma_lo?.trim();
   });
 
   // Hạn mức công nợ: cảnh báo nếu chứng từ này sẽ đẩy công nợ khách hàng vượt hạn mức đã khai.
@@ -2684,12 +2854,29 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, warehouse
     const withNames = validLines.map((l) => {
       const units = unitsFor(l.hang_hoa_id);
       const tyLe = units[l.don_vi_idx || 0]?.ty_le || 1;
-      return {
+      const baseQty = (Number(l.so_luong) || 0) * tyLe;
+      const product = products.find((p) => p.id === l.hang_hoa_id);
+      const item = {
         hang_hoa_id: l.hang_hoa_id,
-        ten: products.find((p) => p.id === l.hang_hoa_id)?.ten || "",
-        so_luong: (Number(l.so_luong) || 0) * tyLe, // converted to base units
+        ten: product?.ten || "",
+        so_luong: baseQty, // converted to base units
         don_gia: tyLe > 1 ? Math.round((Number(l.don_gia) || 0) / tyLe) : (Number(l.don_gia) || 0), // converted to per-base-unit price
       };
+      if (product && product.quan_ly_ton_kho && product.quan_ly_ton_kho !== "thuong") {
+        if (!isSale) {
+          // Mua hàng: ghi lại số lô/HSD hoặc danh sách serial vừa khai để tạo bản ghi lô mới.
+          if (product.quan_ly_ton_kho === "serial") {
+            item.serials = (l.serials || "").split("\n").map((s) => s.trim()).filter(Boolean);
+          } else {
+            item.ma_lo = l.ma_lo?.trim();
+            item.han_su_dung = l.han_su_dung || undefined;
+          }
+        } else {
+          // Bán hàng: chốt lại phương án phân bổ lô tại thời điểm lưu (FEFO/FIFO).
+          item.lo_phan_bo = phanBoLoHang(lots, l.hang_hoa_id, khoId, baseQty).allocations;
+        }
+      }
+      return item;
     });
     onSave({
       ma: uid(isSale ? "HD" : "PN").toUpperCase(),
@@ -2737,6 +2924,16 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, warehouse
         {overCreditLimit && (
           <div className="mb-3 px-3 py-2 rounded-md text-[12.5px] flex items-center gap-2" style={{ background: COLORS.redBg, color: COLORS.red }}>
             <AlertTriangle size={13} /> Khách hàng sẽ nợ {fmtVND(projectedDebt)} sau chứng từ này — vượt hạn mức công nợ {fmtVND(customer.han_muc_cong_no)}.
+          </div>
+        )}
+        {hasLotShortage && (
+          <div className="mb-3 px-3 py-2 rounded-md text-[12.5px] flex items-center gap-2" style={{ background: COLORS.redBg, color: COLORS.red }}>
+            <AlertTriangle size={13} /> Không đủ lô/serial còn tồn cho một số mặt hàng — kiểm tra lại số lượng.
+          </div>
+        )}
+        {missingLotInfo && (
+          <div className="mb-3 px-3 py-2 rounded-md text-[12.5px] flex items-center gap-2" style={{ background: COLORS.goldBg, color: "#5C4109" }}>
+            <AlertTriangle size={13} /> Còn hàng hóa quản lý theo lô/serial chưa khai đủ thông tin bên dưới.
           </div>
         )}
         {isSale && channels?.length > 0 && (
@@ -2789,6 +2986,17 @@ function InvoiceForm({ mode, partners, products, priceLists, channels, warehouse
                   <div className="mt-1 text-[11.5px] flex items-center gap-1" style={{ color: COLORS.red }}>
                     <AlertTriangle size={12} /> Vượt tồn kho — chỉ còn {availableQty} {product.dvt}, đang bán {baseQty} {product.dvt}
                   </div>
+                )}
+                {product && product.quan_ly_ton_kho && product.quan_ly_ton_kho !== "thuong" && (
+                  <LotLineFields
+                    mode={mode}
+                    product={product}
+                    line={l}
+                    baseQty={baseQty}
+                    khoId={khoId}
+                    lots={lots}
+                    onChange={(patch) => setLine(idx, patch)}
+                  />
                 )}
               </div>
             );
@@ -3042,9 +3250,193 @@ function SalesOrderForm({ partners, products, priceLists, channels, onSave, onCa
 }
 
 /* ------------------------------------------------------------------ */
+/* Đơn đặt hàng mua — đặt trước với nhà cung cấp, xuất phiếu mua khi     */
+/* nhận hàng. Gương của Đơn đặt hàng (bán) ở trên.                      */
+/* ------------------------------------------------------------------ */
+function PurchaseOrdersPage({ store, purchaseStore, productStore, partnerStore, warehouses, lotStore }) {
+  const { items: orders, add, update, remove } = store;
+  const { items: suppliers } = partnerStore;
+  const { items: products, setItems: setProducts } = productStore;
+  const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [converting, setConverting] = useState(null);
+  const [toDelete, setToDelete] = useState(null);
+  const [printing, setPrinting] = useState(null);
+
+  const partnerName = (id) => suppliers.find((p) => p.id === id)?.ten || "—";
+  const list = orders
+    .filter((o) => !query || o.ma?.toLowerCase().includes(query.toLowerCase()) || partnerName(o.doi_tac_id).toLowerCase().includes(query.toLowerCase()))
+    .sort((a, b) => (b.ngay || "").localeCompare(a.ngay || ""));
+
+  function createOrder(form) {
+    add({ ...form, id: uid("DHM"), trang_thai: "new" });
+    setCreating(false);
+  }
+
+  function convertToInvoice(order, invoiceForm) {
+    purchaseStore.add({ ...invoiceForm, id: uid("PN") });
+    setProducts((cur) => {
+      const next = cur.map((p) => {
+        const line = invoiceForm.items.find((it) => it.hang_hoa_id === p.id);
+        if (!line) return p;
+        // Mua hàng: giá vốn cập nhật theo bình quân gia quyền, giống InvoicePage.createInvoice.
+        const updated = adjustProductStock(p, line.so_luong, invoiceForm.kho_id);
+        return { ...updated, gia_von: weightedAvgCost(p.ton_kho || 0, p.gia_von || 0, line.so_luong, line.don_gia) };
+      });
+      storageSet(STORE_KEYS.products, next);
+      return next;
+    });
+    if (lotStore) {
+      const nextLots = applyLotChanges(lotStore.items, false, invoiceForm.items, invoiceForm.kho_id);
+      lotStore.persist(nextLots, "update", { silent: true });
+    }
+    update(order.id, { trang_thai: "invoiced" });
+    setConverting(null);
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Đơn đặt hàng mua"
+        subtitle="Ghi nhận đơn đặt trước với nhà cung cấp, nhập kho khi hàng về"
+        action={<Btn onClick={() => setCreating(true)}><Plus size={15} /> Tạo đơn đặt hàng mua</Btn>}
+      />
+      <Toolbar query={query} setQuery={setQuery} placeholder="Tìm theo mã đơn hoặc nhà cung cấp..." />
+      {list.length === 0 ? (
+        <EmptyState icon={ClipboardList} title="Chưa có đơn đặt hàng mua" hint="Tạo đơn đặt trước với nhà cung cấp, sau đó nhập phiếu mua khi hàng về." action={<Btn onClick={() => setCreating(true)}><Plus size={15} /> Tạo đơn đặt hàng mua</Btn>} />
+      ) : (
+        <Table
+          columns={[
+            { key: "ma", label: "Số đơn" },
+            { key: "ngay", label: "Ngày đặt", render: (r) => fmtDate(r.ngay) },
+            { key: "ngay_giao", label: "Ngày nhận dự kiến", render: (r) => fmtDate(r.ngay_giao) || "—" },
+            { key: "doi_tac_id", label: "Nhà cung cấp", render: (r) => partnerName(r.doi_tac_id) },
+            { key: "tong_tien", label: "Tổng tiền", align: "right", render: (r) => fmtVND(r.tong_tien) },
+            { key: "trang_thai", label: "Trạng thái", render: (r) => <Badge tone={SO_STATUS[r.trang_thai]?.tone}>{SO_STATUS[r.trang_thai]?.label}</Badge> },
+            {
+              key: "action", label: "", sortable: false, render: (r) => (
+                r.trang_thai === "new" || r.trang_thai === "confirmed" ? (
+                  <Btn size="sm" onClick={() => setConverting(r)}>Nhập kho</Btn>
+                ) : null
+              ),
+            },
+          ]}
+          rows={list}
+          onPrint={setPrinting}
+          onDelete={setToDelete}
+        />
+      )}
+      {creating && <PurchaseOrderForm suppliers={suppliers} products={products} onCancel={() => setCreating(false)} onSave={createOrder} />}
+      {converting && (
+        <InvoiceForm
+          mode="purchase"
+          partners={suppliers}
+          products={products}
+          warehouses={warehouses}
+          initialDoc={converting}
+          onCancel={() => setConverting(null)}
+          onSave={(invForm) => convertToInvoice(converting, invForm)}
+          lots={lotStore?.items}
+        />
+      )}
+      {toDelete && <ConfirmBar text={`Xóa đơn đặt hàng "${toDelete.ma}"?`} onConfirm={() => { remove(toDelete.id); setToDelete(null); }} onCancel={() => setToDelete(null)} />}
+      {printing && (
+        <PrintDocument
+          onClose={() => setPrinting(null)}
+          doc={{ title: "Đơn đặt hàng mua", ma: printing.ma, ngay: printing.ngay, partnerLabel: "Nhà cung cấp", partnerName: partnerName(printing.doi_tac_id), items: printing.items, total: printing.tong_tien, note: printing.ghi_chu }}
+        />
+      )}
+    </div>
+  );
+}
+
+function PurchaseOrderForm({ suppliers, products, onSave, onCancel }) {
+  const [doiTacId, setDoiTacId] = useState(suppliers[0]?.id || "");
+  const [ngay, setNgay] = useState(todayStr());
+  const [ngayGiao, setNgayGiao] = useState("");
+  const [ghiChu, setGhiChu] = useState("");
+  const [lines, setLines] = useState([{ hang_hoa_id: "", so_luong: 1, don_gia: 0 }]);
+
+  const total = lines.reduce((s, l) => s + (Number(l.so_luong) || 0) * (Number(l.don_gia) || 0), 0);
+
+  function setLine(idx, patch) {
+    setLines((cur) => {
+      const next = [...cur];
+      next[idx] = { ...next[idx], ...patch };
+      if (patch.hang_hoa_id) {
+        next[idx].don_gia = products.find((p) => p.id === patch.hang_hoa_id)?.gia_von || 0;
+      }
+      return next;
+    });
+  }
+  function addLine() { setLines((cur) => [...cur, { hang_hoa_id: "", so_luong: 1, don_gia: 0 }]); }
+  function removeLine(idx) { setLines((cur) => cur.filter((_, i) => i !== idx)); }
+
+  function submit(e) {
+    e.preventDefault();
+    const validLines = lines.filter((l) => l.hang_hoa_id && l.so_luong > 0);
+    if (!doiTacId || validLines.length === 0) return;
+    const withNames = validLines.map((l) => ({
+      hang_hoa_id: l.hang_hoa_id,
+      ten: products.find((p) => p.id === l.hang_hoa_id)?.ten || "",
+      so_luong: Number(l.so_luong) || 0,
+      don_gia: Number(l.don_gia) || 0,
+    }));
+    onSave({ ma: uid("DHM").toUpperCase(), ngay, ngay_giao: ngayGiao, doi_tac_id: doiTacId, items: withNames, tong_tien: total, ghi_chu: ghiChu });
+  }
+
+  return (
+    <Modal title="Tạo đơn đặt hàng mua" onClose={onCancel} width="max-w-3xl">
+      <form onSubmit={submit}>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-3">
+          <Field label="Nhà cung cấp" required>
+            <select required className={inputCls} style={inputStyle} value={doiTacId} onChange={(e) => setDoiTacId(e.target.value)}>
+              <option value="">-- Chọn --</option>
+              {suppliers.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
+            </select>
+          </Field>
+          <Field label="Ngày đặt"><input type="date" className={inputCls} style={inputStyle} value={ngay} onChange={(e) => setNgay(e.target.value)} /></Field>
+          <Field label="Ngày nhận dự kiến"><input type="date" className={inputCls} style={inputStyle} value={ngayGiao} onChange={(e) => setNgayGiao(e.target.value)} /></Field>
+        </div>
+        <div className="mt-1 mb-2 text-[12.5px] font-medium" style={{ color: COLORS.textMuted }}>Chi tiết hàng hóa</div>
+        <div className="rounded-md border overflow-x-auto" style={{ borderColor: COLORS.border }}>
+          {lines.map((l, idx) => (
+            <div key={idx} className="flex items-center gap-2 px-2.5 py-2 border-b last:border-b-0 min-w-[600px]" style={{ borderColor: COLORS.border }}>
+              <select className={inputCls + " flex-1"} style={inputStyle} value={l.hang_hoa_id} onChange={(e) => setLine(idx, { hang_hoa_id: e.target.value })}>
+                <option value="">-- Chọn hàng hóa --</option>
+                {products.map((p) => <option key={p.id} value={p.id}>{p.ten}</option>)}
+              </select>
+              <input type="number" min="1" className={inputCls} style={{ ...inputStyle, width: 65 }} value={l.so_luong} onChange={(e) => setLine(idx, { so_luong: +e.target.value })} />
+              <span className="text-[12px] w-16 shrink-0" style={{ color: COLORS.textMuted }}>{products.find((p) => p.id === l.hang_hoa_id)?.dvt || "—"}</span>
+              <input type="number" min="0" className={inputCls} style={{ ...inputStyle, width: 110 }} value={l.don_gia} onChange={(e) => setLine(idx, { don_gia: +e.target.value })} />
+              <div className="w-28 text-right text-[13px]" style={{ color: COLORS.text }}>{fmtVND((l.so_luong || 0) * (l.don_gia || 0))}</div>
+              <button type="button" onClick={() => removeLine(idx)} className="p-1 rounded hover:bg-slate-100"><X size={14} color={COLORS.textMuted} /></button>
+            </div>
+          ))}
+        </div>
+        <button type="button" onClick={addLine} className="mt-2 text-[12.5px] font-medium flex items-center gap-1" style={{ color: COLORS.navy }}>
+          <Plus size={13} /> Thêm dòng hàng
+        </button>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 mt-4">
+          <Field label="Ghi chú"><input className={inputCls} style={inputStyle} value={ghiChu} onChange={(e) => setGhiChu(e.target.value)} /></Field>
+          <div className="flex flex-col items-end justify-center pt-4">
+            <span className="text-[12.5px]" style={{ color: COLORS.textMuted }}>Tổng cộng</span>
+            <span className="text-[18px] font-semibold" style={{ color: COLORS.navy }}>{fmtVND(total)}</span>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+          <Btn type="button" variant="outline" onClick={onCancel}>Hủy</Btn>
+          <Btn type="submit">Lưu đơn đặt hàng mua</Btn>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Bán hàng nhanh (POS)                                                */
 /* ------------------------------------------------------------------ */
-function POSPage({ products, customers, priceLists, channels, warehouses, salesStore, productStore, paymentMethods }) {
+function POSPage({ products, customers, priceLists, channels, warehouses, salesStore, productStore, paymentMethods, lotStore }) {
   const { add: addSale } = salesStore;
   const { setItems: setProducts } = productStore;
   const [cart, setCart] = useState([]); // [{ hang_hoa_id, ten, so_luong, don_gia, dvt }]
@@ -3120,7 +3512,16 @@ function POSPage({ products, customers, priceLists, channels, warehouses, salesS
 
   function checkout() {
     if (cart.length === 0) return;
-    const items = cart.map((l) => ({ hang_hoa_id: l.hang_hoa_id, ten: l.ten, so_luong: l.so_luong, don_gia: l.don_gia }));
+    const items = cart.map((l) => {
+      const item = { hang_hoa_id: l.hang_hoa_id, ten: l.ten, so_luong: l.so_luong, don_gia: l.don_gia };
+      const product = products.find((p) => p.id === l.hang_hoa_id);
+      // Hàng theo lô/serial: POS không có màn hình chọn lô thủ công, tự động
+      // phân bổ theo hết-hạn-trước / nhập-trước (giống ưu tiên trên đơn bán thường).
+      if (product?.quan_ly_ton_kho && product.quan_ly_ton_kho !== "thuong" && lotStore) {
+        item.lo_phan_bo = phanBoLoHang(lotStore.items, l.hang_hoa_id, khoId, l.so_luong).allocations;
+      }
+      return item;
+    });
     // POS luôn coi là thanh toán đủ ngay lúc bán; nếu khách đưa dư (để lấy tiền
     // thối), phần dư đó không tính vào doanh thu/tiền mặt thực nhận — trừ bớt
     // vào dòng cuối cùng trước khi lưu.
@@ -3158,6 +3559,10 @@ function POSPage({ products, customers, priceLists, channels, warehouses, salesS
       storageSet(STORE_KEYS.products, next);
       return next;
     });
+    if (lotStore) {
+      const nextLots = applyLotChanges(lotStore.items, true, items, khoId);
+      lotStore.persist(nextLots, "update", { silent: true });
+    }
     setLastReceipt(invoice);
     setCart([]);
     setPaymentRows([{ phuong_thuc_id: paymentMethods?.[0]?.id || "", so_tien: 0 }]);
@@ -4061,6 +4466,78 @@ function DebtPage({ customers, suppliers, sales, purchases, receipts, payments, 
 /* ------------------------------------------------------------------ */
 /* Tồn kho                                                             */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Lô hàng / Serial — xem tồn theo lô, cảnh báo sắp hết hạn              */
+/* ------------------------------------------------------------------ */
+function LotsPage({ lotStore, products, warehouses }) {
+  const { items: lots } = lotStore;
+  const [query, setQuery] = useState("");
+  const [khoId, setKhoId] = useState("all");
+
+  const productName = (id) => products.find((p) => p.id === id)?.ten || "—";
+  const warehouseName = (id) => warehouses?.find((w) => w.id === id)?.ten;
+
+  const q = query.trim().toLowerCase();
+  const rows = lots
+    .filter((l) => (l.so_luong || 0) > 0)
+    .filter((l) => khoId === "all" || l.kho_id === khoId || !l.kho_id)
+    .filter((l) => !q || l.ma_lo?.toLowerCase().includes(q) || productName(l.hang_hoa_id).toLowerCase().includes(q))
+    .sort((a, b) => (a.han_su_dung || "9999").localeCompare(b.han_su_dung || "9999"));
+
+  const today = todayStr();
+  function expiryTone(hsd) {
+    if (!hsd) return null;
+    const days = Math.floor((new Date(hsd) - new Date(today)) / 86400000);
+    if (days < 0) return "red";
+    if (days <= 30) return "amber";
+    return null;
+  }
+  const expiringCount = rows.filter((l) => { const t = expiryTone(l.han_su_dung); return t === "red" || t === "amber"; }).length;
+
+  return (
+    <div>
+      <PageHeader title="Lô hàng / Serial" subtitle="Tồn kho theo từng lô, hạn sử dụng và số serial/IMEI" />
+      {expiringCount > 0 && (
+        <div className="mb-4 px-3 py-2 rounded-md text-[12.5px] flex items-center gap-2" style={{ background: COLORS.redBg, color: COLORS.red }}>
+          <AlertTriangle size={14} /> {expiringCount} lô đã hết hạn hoặc sắp hết hạn trong 30 ngày tới.
+        </div>
+      )}
+      <div className="flex items-center gap-2 mb-3">
+        <Toolbar query={query} setQuery={setQuery} placeholder="Tìm theo số lô/serial hoặc tên hàng..." />
+        {warehouses?.length > 1 && (
+          <select className={inputCls} style={{ ...inputStyle, minWidth: 150 }} value={khoId} onChange={(e) => setKhoId(e.target.value)}>
+            <option value="all">Tất cả các kho</option>
+            {warehouses.map((w) => <option key={w.id} value={w.id}>{w.ten}</option>)}
+          </select>
+        )}
+      </div>
+      {rows.length === 0 ? (
+        <EmptyState icon={Tag} title="Chưa có lô hàng nào" hint="Bật quản lý theo lô/serial cho hàng hóa cần theo dõi, số lô sẽ xuất hiện khi nhập hàng." />
+      ) : (
+        <Table
+          columns={[
+            { key: "hang_hoa_id", label: "Hàng hóa", render: (r) => productName(r.hang_hoa_id) },
+            { key: "ma_lo", label: "Số lô / Serial" },
+            {
+              key: "han_su_dung", label: "Hạn sử dụng",
+              render: (r) => {
+                if (!r.han_su_dung) return "—";
+                const tone = expiryTone(r.han_su_dung);
+                return tone ? <Badge tone={tone === "red" ? "red" : "amber"}>{fmtDate(r.han_su_dung)}</Badge> : fmtDate(r.han_su_dung);
+              },
+            },
+            { key: "so_luong", label: "Còn lại", align: "right" },
+            { key: "kho_id", label: "Kho", render: (r) => warehouseName(r.kho_id) || "—" },
+            { key: "ngay_nhap", label: "Ngày nhập", render: (r) => fmtDate(r.ngay_nhap) },
+          ]}
+          rows={rows}
+          rowKey="id"
+        />
+      )}
+    </div>
+  );
+}
+
 function StockPage({ products, warehouses }) {
   const [query, setQuery] = useState("");
   const [khoId, setKhoId] = useState("all");
@@ -5835,8 +6312,9 @@ const BACKUP_STORE_LABELS = {
   products: "Hàng hóa", customers: "Khách hàng", suppliers: "Nhà cung cấp",
   sales: "Bán hàng", purchases: "Mua hàng", receipts: "Phiếu thu", payments: "Phiếu chi",
   vouchers: "Phiếu kho (Nhập/Xuất)", salereturns: "Trả hàng bán", purchasereturns: "Trả hàng mua",
-  pricelists: "Bảng giá", salesorders: "Đơn đặt hàng", employees: "Nhân viên", payroll: "Bảng lương",
+  pricelists: "Bảng giá", salesorders: "Đơn đặt hàng", purchaseorders: "Đơn đặt hàng mua", employees: "Nhân viên", payroll: "Bảng lương",
   channels: "Kênh bán hàng", paymentmethods: "Phương thức thanh toán", users: "Người dùng (tài khoản)",
+  lots: "Lô hàng / Serial",
 };
 
 function BackupPage({ stores }) {
@@ -6117,6 +6595,8 @@ export default function App() {
   const usersStore = useCollection(STORE_KEYS.users);
   const priceListStore = useCollection(STORE_KEYS.pricelists);
   const salesOrderStore = useCollection(STORE_KEYS.salesorders);
+  const purchaseOrderStore = useCollection(STORE_KEYS.purchaseorders);
+  const lotStore = useCollection(STORE_KEYS.lots);
   const employeeStore = useCollection(STORE_KEYS.employees);
   const payrollStore = useCollection(STORE_KEYS.payroll);
   const channelStore = useCollection(STORE_KEYS.channels);
@@ -6143,7 +6623,7 @@ export default function App() {
     purchaseReturnStore.loading || priceListStore.loading || salesOrderStore.loading ||
     employeeStore.loading || payrollStore.loading || channelStore.loading ||
     paymentMethodStore.loading || auditLogStore.loading || warehouseStore.loading || einvoiceStore.loading ||
-    companyStore.loading || stocktakeStore.loading;
+    companyStore.loading || stocktakeStore.loading || purchaseOrderStore.loading || lotStore.loading;
 
   const allowedPages = auth.currentUser ? (ROLE_PAGES[auth.currentUser.role] || null) : [];
 
@@ -6195,6 +6675,7 @@ export default function App() {
         salesStore={salesStore}
         productStore={productStore}
         paymentMethods={paymentMethodStore.items}
+        lotStore={lotStore}
       />
     ),
     salesorders: (
@@ -6206,6 +6687,16 @@ export default function App() {
         priceLists={priceListStore.items}
         channels={channelStore.items}
         warehouses={warehouseStore.items}
+      />
+    ),
+    purchaseorders: (
+      <PurchaseOrdersPage
+        store={purchaseOrderStore}
+        purchaseStore={purchaseStore}
+        productStore={productStore}
+        partnerStore={supplierStore}
+        warehouses={warehouseStore.items}
+        lotStore={lotStore}
       />
     ),
     sales: (
@@ -6222,10 +6713,11 @@ export default function App() {
         receiptsData={receiptStore.items}
         salereturnsData={saleReturnStore.items}
         paymentMethods={paymentMethodStore.items}
+        lotStore={lotStore}
       />
     ),
     salereturns: <ReturnPage mode="sale" retStore={saleReturnStore} invStore={salesStore} partnerStore={customerStore} productStore={productStore} warehouses={warehouseStore.items} />,
-    purchases: <InvoicePage mode="purchase" invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} warehouses={warehouseStore.items} receiptsData={paymentStore.items} salereturnsData={purchaseReturnStore.items} paymentMethods={paymentMethodStore.items} />,
+    purchases: <InvoicePage mode="purchase" invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} warehouses={warehouseStore.items} receiptsData={paymentStore.items} salereturnsData={purchaseReturnStore.items} paymentMethods={paymentMethodStore.items} lotStore={lotStore} />,
     purchasereturns: <ReturnPage mode="purchase" retStore={purchaseReturnStore} invStore={purchaseStore} partnerStore={supplierStore} productStore={productStore} warehouses={warehouseStore.items} />,
     stockin: <StockVoucherPage type="in" store={voucherStore} productStore={productStore} warehouses={warehouseStore.items} />,
     stockout: <StockVoucherPage type="out" store={voucherStore} productStore={productStore} warehouses={warehouseStore.items} />,
@@ -6248,6 +6740,7 @@ export default function App() {
     ),
     stock: <StockPage products={productStore.items} warehouses={warehouseStore.items} />,
     stocktake: <StockTakePage store={stocktakeStore} productStore={productStore} warehouses={warehouseStore.items} />,
+    lots: <LotsPage lotStore={lotStore} products={productStore.items} warehouses={warehouseStore.items} />,
     nxt: <NXTPage products={productStore.items} sales={salesStore.items} purchases={purchaseStore.items} salereturns={saleReturnStore.items} purchasereturns={purchaseReturnStore.items} vouchers={voucherStore.items} warehouses={warehouseStore.items} />,
     reports: <ReportsPage sales={salesStore.items} purchases={purchaseStore.items} products={productStore.items} channels={channelStore.items} warehouses={warehouseStore.items} />,
     taxreport: <TaxReportPage sales={salesStore.items} purchases={purchaseStore.items} products={productStore.items} />,
@@ -6260,8 +6753,9 @@ export default function App() {
           products: productStore, customers: customerStore, suppliers: supplierStore,
           sales: salesStore, purchases: purchaseStore, receipts: receiptStore, payments: paymentStore,
           vouchers: voucherStore, salereturns: saleReturnStore, purchasereturns: purchaseReturnStore,
-          pricelists: priceListStore, salesorders: salesOrderStore, employees: employeeStore,
+          pricelists: priceListStore, salesorders: salesOrderStore, purchaseorders: purchaseOrderStore, employees: employeeStore,
           payroll: payrollStore, channels: channelStore, paymentmethods: paymentMethodStore, users: usersStore,
+          lots: lotStore,
         }}
       />
     ),
