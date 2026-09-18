@@ -1,0 +1,36 @@
+{
+  "name": "banhang.ntcons — Quản lý bán hàng, kho, công nợ",
+  "short_name": "NTCONS",
+  "description": "Phần mềm quản lý bán hàng, kho, công nợ cho cửa hàng — bán hàng nhanh (POS), tồn kho, hóa đơn, báo cáo.",
+  "id": "/",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
+  "background_color": "#F6F2E9",
+  "theme_color": "#3B2311",
+  "lang": "vi",
+  "dir": "ltr",
+  "categories": ["business", "productivity", "finance"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Bán hàng nhanh (POS)",
+      "short_name": "POS",
+      "url": "/?page=pos",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Bảng điều khiển",
+      "short_name": "Trang chủ",
+      "url": "/?page=dashboard",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

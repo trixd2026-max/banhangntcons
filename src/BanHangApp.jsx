@@ -8,7 +8,7 @@ import {
   Tag, ClipboardList, Contact, Banknote, Landmark, FileSpreadsheet, Store, Percent,
   CreditCard, BookOpen, Database, Bell, Upload, History, ScanLine,
   Building2, CheckCircle2, ChevronLeft, ChevronsUpDown, ChevronUp, ChevronDown, Loader2,
-  ArrowUpRight, ArrowDownRight, CalendarDays
+  ArrowUpRight, ArrowDownRight, CalendarDays, Download
 } from "lucide-react";
 import bcrypt from "bcryptjs";
 
@@ -845,11 +845,73 @@ const ROLE_PAGES = {
   warehouse: ["dashboard", "products", "stockin", "stockout", "stocktransfer", "stock", "stocktake", "lots", "nxt", "warehouses"],
 };
 
+/* ------------------------------------------------------------------ */
+/* Cài đặt ứng dụng ra màn hình chính (PWA)                             */
+/* ------------------------------------------------------------------ */
+let DEFERRED_INSTALL_PROMPT = null;
+const INSTALL_LISTENERS = new Set();
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault(); // tự hiển thị nút của mình thay vì banner mặc định của trình duyệt
+    DEFERRED_INSTALL_PROMPT = e;
+    INSTALL_LISTENERS.forEach((fn) => fn());
+  });
+  window.addEventListener("appinstalled", () => {
+    DEFERRED_INSTALL_PROMPT = null;
+    INSTALL_LISTENERS.forEach((fn) => fn());
+  });
+}
+
+function useInstallPrompt() {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const fn = () => force((x) => x + 1);
+    INSTALL_LISTENERS.add(fn);
+    return () => INSTALL_LISTENERS.delete(fn);
+  }, []);
+
+  const isStandalone =
+    typeof window !== "undefined" &&
+    (window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator?.standalone === true);
+  const isIOS = typeof navigator !== "undefined" && /iphone|ipad|ipod/i.test(navigator.userAgent || "");
+
+  async function promptInstall() {
+    if (!DEFERRED_INSTALL_PROMPT) return;
+    DEFERRED_INSTALL_PROMPT.prompt();
+    await DEFERRED_INSTALL_PROMPT.userChoice;
+    DEFERRED_INSTALL_PROMPT = null;
+    force((x) => x + 1);
+  }
+
+  return { canInstall: !!DEFERRED_INSTALL_PROMPT, promptInstall, isIOS, isStandalone };
+}
+
+function IOSInstallHelpModal({ onClose }) {
+  return (
+    <Modal title="Cài đặt ứng dụng trên iPhone/iPad" onClose={onClose} width="max-w-sm">
+      <ol className="space-y-2.5 text-[13.5px]" style={{ color: COLORS.text }}>
+        <li>1. Nhấn biểu tượng <b>Chia sẻ</b> (hình vuông có mũi tên đi lên) ở thanh công cụ Safari.</li>
+        <li>2. Kéo xuống và chọn <b>"Thêm vào MH chính"</b> (Add to Home Screen).</li>
+        <li>3. Nhấn <b>Thêm</b> ở góc trên bên phải.</li>
+      </ol>
+      <div className="text-[12px] mt-3" style={{ color: COLORS.textMuted }}>
+        Sau khi thêm, mở app từ màn hình chính sẽ chạy toàn màn hình như một ứng dụng thật, không cần mở trình duyệt.
+      </div>
+      <div className="flex justify-end mt-4 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+        <Btn onClick={onClose}>Đã hiểu</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 function Sidebar({ page, setPage, collapsed, setCollapsed, allowedPages, user, onLogout, mobileOpen, onCloseMobile }) {
   function goTo(key) {
     setPage(key);
     onCloseMobile?.();
   }
+  const { canInstall, promptInstall, isIOS, isStandalone } = useInstallPrompt();
+  const [showIOSHelp, setShowIOSHelp] = useState(false);
+  const showInstallBtn = !isStandalone && (canInstall || isIOS);
   return (
     <>
       {mobileOpen && (
@@ -909,6 +971,17 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, allowedPages, user, o
           })}
         </div>
         <div className="px-3 py-3 shrink-0" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+          {showInstallBtn && (
+            <button
+              onClick={canInstall ? promptInstall : () => setShowIOSHelp(true)}
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-[12.5px] mb-2"
+              style={{ color: "#fff", background: "rgba(255,255,255,0.08)" }}
+              title="Cài đặt ứng dụng"
+            >
+              <Download size={14} className="shrink-0" />
+              {!collapsed && "Cài đặt ứng dụng"}
+            </button>
+          )}
           <div className="flex items-center gap-2 px-1 mb-2">
             <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0" style={{ background: COLORS.gold, color: COLORS.navyDark }}>
               {(user?.ten || "?").slice(0, 1).toUpperCase()}
@@ -926,6 +999,7 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, allowedPages, user, o
           </button>
         </div>
       </div>
+      {showIOSHelp && <IOSInstallHelpModal onClose={() => setShowIOSHelp(false)} />}
     </>
   );
 }
@@ -6578,7 +6652,15 @@ function NotificationsBell({ notifications, onNavigate }) {
 /* App shell                                                           */
 /* ------------------------------------------------------------------ */
 export default function App() {
-  const [page, setPage] = useState("dashboard");
+  // Cho phép lối tắt PWA (?page=pos) mở thẳng vào trang tương ứng.
+  const [page, setPage] = useState(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get("page");
+      return p || "dashboard";
+    } catch {
+      return "dashboard";
+    }
+  });
   const [collapsed, setCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
