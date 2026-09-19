@@ -6397,6 +6397,82 @@ function BackupPage({ stores }) {
   const [restored, setRestored] = useState(false);
   const fileInputRef = useRef(null);
 
+  // Sao lưu tự động (máy chủ) — snapshot hàng ngày do Vercel Cron tạo, xem README để bật.
+  const [autoBackups, setAutoBackups] = useState(null); // null = chưa tải xong lần đầu
+  const [autoError, setAutoError] = useState("");
+  const [runNowBusy, setRunNowBusy] = useState(false);
+  const [fetchingId, setFetchingId] = useState(null);
+
+  function apiHeaders() {
+    const secret = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_STORAGE_API_SECRET) || "";
+    return secret ? { "X-Storage-Secret": secret } : {};
+  }
+
+  async function loadAutoBackups() {
+    setAutoError("");
+    try {
+      const res = await fetch("/api/backups", { headers: apiHeaders() });
+      if (!res.ok) throw new Error("status " + res.status);
+      const data = await res.json();
+      setAutoBackups(data.backups || []);
+    } catch (e) {
+      setAutoBackups([]);
+      setAutoError("Không tải được danh sách sao lưu tự động — có thể máy chủ chưa bật tính năng này (xem README).");
+    }
+  }
+
+  useEffect(() => { loadAutoBackups(); }, []);
+
+  async function runBackupNow() {
+    setRunNowBusy(true);
+    setAutoError("");
+    try {
+      const res = await fetch("/api/backup-cron", { headers: apiHeaders() });
+      if (!res.ok) throw new Error("status " + res.status);
+      toast("Đã tạo bản sao lưu mới trên máy chủ.");
+      await loadAutoBackups();
+    } catch (e) {
+      setAutoError("Không tạo được bản sao lưu — kiểm tra lại cấu hình máy chủ (xem README).");
+    } finally {
+      setRunNowBusy(false);
+    }
+  }
+
+  async function fetchAutoBackup(id) {
+    setFetchingId(id);
+    try {
+      const res = await fetch(`/api/backups?id=${id}`, { headers: apiHeaders() });
+      if (!res.ok) throw new Error("status " + res.status);
+      return await res.json();
+    } catch (e) {
+      toast("Không tải được nội dung bản sao lưu này.", "error");
+      return null;
+    } finally {
+      setFetchingId(null);
+    }
+  }
+
+  async function downloadAutoBackup(b) {
+    const full = await fetchAutoBackup(b.id);
+    if (!full) return;
+    const payload = { app: "banhang.ntcons", exported_at: full.created_at, data: full.payload };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `banhang-ntcons-auto-backup-${(full.created_at || "").slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function restoreFromAuto(b) {
+    const full = await fetchAutoBackup(b.id);
+    if (!full) return;
+    setConfirmRestore({ exported_at: full.created_at, data: full.payload });
+  }
+
   function doExport() {
     const payload = { app: "banhang.ntcons", exported_at: new Date().toISOString(), data: {} };
     Object.entries(stores).forEach(([key, store]) => {
@@ -6480,6 +6556,44 @@ function BackupPage({ stores }) {
           <input ref={fileInputRef} type="file" accept="application/json" onChange={handleFileChosen} className="hidden" />
           <Btn variant="outline" onClick={() => fileInputRef.current?.click()}><Upload size={14} /> Chọn file để phục hồi</Btn>
         </div>
+      </div>
+
+      <div className="rounded-lg p-4 mb-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <History size={16} color={COLORS.navy} />
+            <div className="text-[13.5px] font-semibold" style={{ color: COLORS.text }}>Sao lưu tự động (máy chủ)</div>
+          </div>
+          <Btn size="sm" variant="outline" onClick={runBackupNow} busy={runNowBusy}>Sao lưu ngay</Btn>
+        </div>
+        <div className="text-[12.5px] mb-3" style={{ color: COLORS.textMuted }}>
+          Máy chủ tự tạo một bản sao lưu mỗi ngày (2:00 sáng giờ Việt Nam) và giữ lại 30 bản gần nhất. Không cần thao tác gì thêm — mục này chỉ để xem lại hoặc khôi phục khi cần.
+        </div>
+        {autoError && <div className="mb-3 px-3 py-2 rounded-md text-[12px]" style={{ background: COLORS.amberBg, color: "#5C4109" }}>{autoError}</div>}
+        {autoBackups === null ? (
+          <div className="text-[12.5px]" style={{ color: COLORS.textMuted }}>Đang tải...</div>
+        ) : autoBackups.length === 0 ? (
+          !autoError && <div className="text-[12.5px]" style={{ color: COLORS.textMuted }}>Chưa có bản sao lưu tự động nào — bản đầu tiên sẽ xuất hiện sau lần chạy theo lịch, hoặc bấm "Sao lưu ngay".</div>
+        ) : (
+          <Table
+            columns={[
+              { key: "created_at", label: "Thời điểm", render: (r) => new Date(r.created_at).toLocaleString("vi-VN") },
+              { key: "record_count", label: "Số bản ghi", align: "right" },
+              {
+                key: "action", label: "", sortable: false, align: "right",
+                render: (r) => (
+                  <div className="flex items-center justify-end gap-1">
+                    <Btn size="sm" variant="outline" onClick={() => downloadAutoBackup(r)} busy={fetchingId === r.id}>Tải xuống</Btn>
+                    <Btn size="sm" variant="outline" onClick={() => restoreFromAuto(r)} busy={fetchingId === r.id}>Khôi phục</Btn>
+                  </div>
+                ),
+              },
+            ]}
+            rows={autoBackups}
+            rowKey="id"
+            pageSize={10}
+          />
+        )}
       </div>
 
       <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>

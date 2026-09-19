@@ -81,6 +81,15 @@ Khi chạy **độc lập** (như bản deploy trên Vercel này), `src/storage-
 
 Bảng dữ liệu (`ntcons_kv`) được tự động tạo trong lần gọi API đầu tiên — không cần chạy migration thủ công.
 
+### Sao lưu tự động hàng ngày (Vercel Cron)
+
+Ngoài xuất/nhập file thủ công (trang **Sao lưu & Phục hồi**), dự án có sẵn `vercel.json` cấu hình một **Vercel Cron Job** chạy mỗi ngày lúc 2:00 sáng giờ Việt Nam, gọi `api/backup-cron.js` để chụp lại toàn bộ dữ liệu (bảng `ntcons_kv`, `shared = true`) vào bảng `ntcons_backups`, tự động giữ lại 30 bản gần nhất.
+
+- **Không cần cấu hình gì thêm** nếu project đã deploy trên Vercel với database — Cron Job tự kích hoạt theo `vercel.json`, bảng `ntcons_backups` tự tạo ở lần chạy đầu.
+- Xem lại / tải xuống / khôi phục các bản sao lưu tự động ngay trong trang **Sao lưu & Phục hồi** của app.
+- (Tùy chọn, khuyến nghị nếu đã đặt `STORAGE_API_SECRET`) Thêm biến môi trường `CRON_SECRET` = một chuỗi bí mật bất kỳ trong Project Settings → Environment Variables. Vercel sẽ tự động đính kèm chuỗi này khi gọi Cron Job, còn nút "Sao lưu ngay" trong app vẫn dùng `X-Storage-Secret` sẵn có — cả hai đều được endpoint chấp nhận.
+- Vercel Cron Jobs yêu cầu gói **Pro trở lên** để chạy hàng ngày ở giờ cố định; gói Hobby (miễn phí) giới hạn Cron Job chạy tối đa 1 lần/ngày nhưng có thể bị Vercel dời giờ chạy trong ngày — vẫn đủ dùng cho mục đích sao lưu định kỳ. Nếu Cron Job không khả dụng, dùng nút "Sao lưu ngay" hoặc xuất file thủ công thay thế.
+
 ## ⚠️ Lưu ý quan trọng về bảo mật đăng nhập
 
 Lớp đăng nhập/phân quyền trong app này đã được nâng cấp một phần, nhưng vẫn KHÔNG phải bảo mật cấp doanh nghiệp:
